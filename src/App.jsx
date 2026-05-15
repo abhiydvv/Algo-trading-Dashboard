@@ -42,7 +42,7 @@ function App() {
 
   useEffect(() => {
     const socket = io(
-      "http://algo-trading-dashboard-production.up.railway.app"
+      "https://algo-trading-dashboard-production.up.railway.app"
     );
 
     socket.on("marketData", (data) => {
