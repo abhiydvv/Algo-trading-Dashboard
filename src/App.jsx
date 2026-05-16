@@ -1,218 +1,220 @@
 import { useEffect, useState } from "react";
-
 import { io } from "socket.io-client";
 
-import StockCard from "./components/StockCard";
-import TradingPanel from "./components/TradingPanel";
-import PriceChart from "./components/PriceChart";
-
-import "./index.css";
-
 function App() {
-  const [marketData, setMarketData] = useState({
-    AAPL: 192.45,
-    TSLA: 175.1,
-    BTC: 80000,
-    ETH: 2200,
-  });
-
-  const [portfolio, setPortfolio] = useState(() => {
-    const saved =
-      localStorage.getItem("portfolio");
-
-    return saved
-      ? JSON.parse(saved)
-      : {
-          usd: 10000,
-          btc: 0,
-        };
-  });
-
-  const [tradeHistory, setTradeHistory] =
-    useState(() => {
-      const saved =
-        localStorage.getItem(
-          "tradeHistory"
-        );
-
-      return saved
-        ? JSON.parse(saved)
-        : [];
-    });
+  const [marketData, setMarketData] = useState({});
 
   useEffect(() => {
     const socket = io(
-      "https://algo-trading-dashboard-production.up.railway.app"
+      "https://algo-backend-s750.onrender.com"
     );
 
+    socket.on("connect", () => {
+      console.log("Connected:", socket.id);
+    });
+
     socket.on("marketData", (data) => {
+      console.log("LIVE MARKET DATA:", data);
       setMarketData(data);
     });
 
-    return () => socket.disconnect();
+    socket.on("disconnect", () => {
+      console.log("Disconnected");
+    });
+
+    return () => {
+      socket.disconnect();
+    };
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem(
-      "portfolio",
-      JSON.stringify(portfolio)
-    );
-  }, [portfolio]);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "tradeHistory",
-      JSON.stringify(tradeHistory)
-    );
-  }, [tradeHistory]);
-
-  const buyBTC = () => {
-    const amount = 0.01;
-
-    const cost =
-      marketData.BTC * amount;
-
-    if (portfolio.usd < cost) {
-      alert("Not Enough USD");
-      return;
-    }
-
-    setPortfolio((prev) => ({
-      usd: prev.usd - cost,
-      btc: prev.btc + amount,
-    }));
-
-    setTradeHistory((prev) => [
-      {
-        type: "BUY",
-        amount,
-        price: marketData.BTC,
-        time:
-          new Date().toLocaleTimeString(),
-      },
-      ...prev,
-    ]);
-  };
-
-  const sellBTC = () => {
-    const amount = 0.01;
-
-    if (portfolio.btc < amount) {
-      alert("Not Enough BTC");
-      return;
-    }
-
-    const received =
-      marketData.BTC * amount;
-
-    setPortfolio((prev) => ({
-      usd: prev.usd + received,
-      btc: prev.btc - amount,
-    }));
-
-    setTradeHistory((prev) => [
-      {
-        type: "SELL",
-        amount,
-        price: marketData.BTC,
-        time:
-          new Date().toLocaleTimeString(),
-      },
-      ...prev,
-    ]);
-  };
-
-  const totalValue =
-    portfolio.usd +
-    portfolio.btc * marketData.BTC;
-
   return (
-    <div className="app-container">
-      <div className="header">
+    <div
+      style={{
+        backgroundColor: "#000",
+        minHeight: "100vh",
+        color: "white",
+        padding: "40px",
+        fontFamily: "Arial",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "40px",
+        }}
+      >
         <div>
-          <h1>
+          <h1
+            style={{
+              fontSize: "80px",
+              margin: 0,
+              fontWeight: "bold",
+            }}
+          >
             Algorithmic Trading Dashboard
           </h1>
 
-          <p>
+          <p
+            style={{
+              color: "gray",
+              fontSize: "20px",
+              marginTop: "20px",
+            }}
+          >
             Real-Time Market Overview
           </p>
         </div>
 
-        <button className="connect-btn">
+        <button
+          style={{
+            backgroundColor: "#14e05c",
+            color: "white",
+            border: "none",
+            padding: "25px 50px",
+            borderRadius: "20px",
+            fontSize: "24px",
+            fontWeight: "bold",
+            cursor: "pointer",
+          }}
+        >
           Connect Broker
         </button>
       </div>
 
-      <div className="stock-grid">
-        <StockCard
-          symbol="AAPL"
-          price={marketData.AAPL.toFixed(2)}
-          change={1.24}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: "20px",
+        }}
+      >
+        <Card
+          title="AAPL"
+          value={marketData?.AAPL?.price || "Loading..."}
+          change={marketData?.AAPL?.change || "0%"}
         />
 
-        <StockCard
-          symbol="TSLA"
-          price={marketData.TSLA.toFixed(2)}
-          change={-2.11}
+        <Card
+          title="TSLA"
+          value={marketData?.TSLA?.price || "Loading..."}
+          change={marketData?.TSLA?.change || "0%"}
         />
 
-        <StockCard
-          symbol="BTC"
-          price={marketData.BTC.toFixed(0)}
-          change={4.82}
+        <Card
+          title="BTC"
+          value={marketData?.BTC?.price || "Loading..."}
+          change={marketData?.BTC?.change || "0%"}
         />
 
-        <StockCard
-          symbol="ETH"
-          price={marketData.ETH.toFixed(2)}
-          change={2.01}
+        <Card
+          title="ETH"
+          value={marketData?.ETH?.price || "Loading..."}
+          change={marketData?.ETH?.change || "0%"}
         />
       </div>
 
-      <TradingPanel
-        portfolio={portfolio}
-        btcPrice={marketData.BTC}
-        totalValue={totalValue}
-        onBuy={buyBTC}
-        onSell={sellBTC}
-      />
+      <div
+        style={{
+          backgroundColor: "#001a66",
+          marginTop: "40px",
+          padding: "30px",
+          borderRadius: "25px",
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <h2>BTC Live Trading</h2>
 
-      <PriceChart
-        btcPrice={marketData.BTC}
-      />
+          <p>Total Value: $10000.00</p>
+          <p>USD Balance: $9200.00</p>
+          <p>BTC Holdings: 0.0100</p>
 
-      <div className="history-panel">
-        <h2>Trade History</h2>
+          <p>
+            BTC Price: $
+            {marketData?.BTC?.price || "Loading..."}
+          </p>
+        </div>
 
-        {tradeHistory.length === 0 ? (
-          <p>No Trades Yet</p>
-        ) : (
-          tradeHistory.map(
-            (trade, index) => (
-              <div
-                className="trade-item"
-                key={index}
-              >
-                <span>{trade.type}</span>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "20px",
+          }}
+        >
+          <button
+            style={{
+              backgroundColor: "#14e05c",
+              color: "white",
+              border: "none",
+              padding: "20px 40px",
+              borderRadius: "15px",
+              fontSize: "20px",
+              fontWeight: "bold",
+              cursor: "pointer",
+            }}
+          >
+            Buy BTC
+          </button>
 
-                <span>
-                  {trade.amount} BTC
-                </span>
-
-                <span>
-                  $
-                  {trade.price.toFixed(
-                    2
-                  )}
-                </span>
-
-                <span>{trade.time}</span>
-              </div>
-            )
-          )
-        )}
+          <button
+            style={{
+              backgroundColor: "#ff3636",
+              color: "white",
+              border: "none",
+              padding: "20px 40px",
+              borderRadius: "15px",
+              fontSize: "20px",
+              fontWeight: "bold",
+              cursor: "pointer",
+            }}
+          >
+            Sell BTC
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function Card({ title, value, change }) {
+  return (
+    <div
+      style={{
+        backgroundColor: "#001a66",
+        padding: "30px",
+        borderRadius: "25px",
+      }}
+    >
+      <h2>{title}</h2>
+
+      <h1
+        style={{
+          fontSize: "70px",
+          marginTop: "40px",
+        }}
+      >
+        $
+        {typeof value === "number"
+          ? value.toLocaleString()
+          : value}
+      </h1>
+
+      <p
+        style={{
+          color:
+            change.toString().includes("-")
+              ? "#ff5b5b"
+              : "#14e05c",
+          fontWeight: "bold",
+          fontSize: "28px",
+        }}
+      >
+        {change}
+      </p>
     </div>
   );
 }
