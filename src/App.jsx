@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import io from "socket.io-client";
+import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://algo-backend-s750.onrender.com", {
-  transports: ["polling", "websocket"],
-});
+const socket = io("https://algo-backend-s750.onrender.com");
 
 function App() {
   const [stocks, setStocks] = useState({
@@ -16,11 +14,11 @@ function App() {
 
   useEffect(() => {
     socket.on("connect", () => {
-      console.log("Connected");
+      console.log("Socket connected");
     });
 
     socket.on("marketData", (data) => {
-      console.log(data);
+      console.log("Received:", data);
       setStocks(data);
     });
 
@@ -38,19 +36,12 @@ function App() {
       <h1>Algorithmic Trading Dashboard</h1>
       <p>Real-Time Market Overview</p>
 
-      <div className="stocks-grid">
+      <div className="cards">
         {Object.entries(stocks).map(([symbol, data]) => (
-          <div key={symbol} className="stock-card">
+          <div className="card" key={symbol}>
             <h2>{symbol}</h2>
             <h1>${data.price}</h1>
-
-            <p
-              style={{
-                color: Number(data.change) >= 0 ? "#00ff99" : "#ff4444",
-              }}
-            >
-              {data.change}%
-            </p>
+            <p>{data.change}%</p>
           </div>
         ))}
       </div>
