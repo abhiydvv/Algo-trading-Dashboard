@@ -3,7 +3,7 @@ import io from "socket.io-client";
 import "./App.css";
 
 const socket = io("https://algo-backend-s750.onrender.com", {
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"],
 });
 
 function App() {
