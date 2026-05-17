@@ -1,19 +1,14 @@
-const express = require("express");
-const http = require("http");
-const cors = require("cors");
-const { Server } = require("socket.io");
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
 
 const app = express();
 
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST"],
-  })
-);
+app.use(cors());
 
 app.get("/", (req, res) => {
-  res.send("Backend Running");
+  res.send("Backend running");
 });
 
 const server = http.createServer(app);
@@ -22,7 +17,6 @@ const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
-    credentials: true,
   },
   transports: ["websocket", "polling"],
 });
@@ -31,24 +25,33 @@ io.on("connection", (socket) => {
   console.log("Client connected");
 
   const interval = setInterval(() => {
-    socket.emit("marketData", {
+    const marketData = {
       AAPL: {
-        price: (180 + Math.random() * 20).toFixed(2),
+        price: (180 + Math.random() * 10).toFixed(2),
         change: (Math.random() * 4 - 2).toFixed(2),
+        signal: Math.random() > 0.5 ? "BUY" : "SELL",
       },
+
       TSLA: {
-        price: (170 + Math.random() * 20).toFixed(2),
+        price: (250 + Math.random() * 20).toFixed(2),
         change: (Math.random() * 4 - 2).toFixed(2),
+        signal: Math.random() > 0.5 ? "BUY" : "SELL",
       },
+
       BTC: {
-        price: (100000 + Math.random() * 5000).toFixed(2),
+        price: (104000 + Math.random() * 1000).toFixed(2),
         change: (Math.random() * 4 - 2).toFixed(2),
+        signal: Math.random() > 0.5 ? "BUY" : "SELL",
       },
+
       ETH: {
-        price: (3000 + Math.random() * 300).toFixed(2),
+        price: (2400 + Math.random() * 100).toFixed(2),
         change: (Math.random() * 4 - 2).toFixed(2),
+        signal: Math.random() > 0.5 ? "BUY" : "SELL",
       },
-    });
+    };
+
+    socket.emit("marketData", marketData);
   }, 2000);
 
   socket.on("disconnect", () => {
@@ -57,7 +60,7 @@ io.on("connection", (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
