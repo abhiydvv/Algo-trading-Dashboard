@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://algo-backend-s75o.onrender.com", {
-  transports: ["websocket", "polling"],
+const socket = io("https://algo-backend-s750.onrender.com", {
+  transports: ["polling"],
+  reconnection: true,
 });
 
 function App() {
@@ -16,11 +17,22 @@ function App() {
 
   useEffect(() => {
     socket.on("marketData", (data) => {
+      console.log("Received market data:", data);
       setStocks(data);
+    });
+
+    socket.on("connect", () => {
+      console.log("Connected to backend");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.log("Connection error:", err);
     });
 
     return () => {
       socket.off("marketData");
+      socket.off("connect");
+      socket.off("connect_error");
     };
   }, []);
 
@@ -32,7 +44,9 @@ function App() {
           <p>Real-Time Market Overview</p>
         </div>
 
-        <button className="connect-btn">Connect Broker</button>
+        <button className="connect-btn">
+          Connect Broker
+        </button>
       </div>
 
       <div className="stock-grid">
@@ -71,8 +85,13 @@ function App() {
         </div>
 
         <div className="trade-buttons">
-          <button className="buy-btn">Buy BTC</button>
-          <button className="sell-btn">Sell BTC</button>
+          <button className="buy-btn">
+            Buy BTC
+          </button>
+
+          <button className="sell-btn">
+            Sell BTC
+          </button>
         </div>
       </div>
     </div>
