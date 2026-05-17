@@ -8,39 +8,26 @@ const socket = io("https://algo-backend-s750.onrender.com", {
 
 function App() {
   const [stocks, setStocks] = useState({
-    AAPL: {
-      price: "Loading...",
-      change: "0",
-      signal: "WAIT",
-    },
-
-    TSLA: {
-      price: "Loading...",
-      change: "0",
-      signal: "WAIT",
-    },
-
-    BTC: {
-      price: "Loading...",
-      change: "0",
-      signal: "WAIT",
-    },
-
-    ETH: {
-      price: "Loading...",
-      change: "0",
-      signal: "WAIT",
-    },
+    AAPL: { price: "Loading...", change: 0 },
+    TSLA: { price: "Loading...", change: 0 },
+    BTC: { price: "Loading...", change: 0 },
+    ETH: { price: "Loading...", change: 0 },
   });
+
+  const [tradeHistory, setTradeHistory] = useState([]);
 
   useEffect(() => {
     socket.on("connect", () => {
-      console.log("Socket connected");
+      console.log("Socket Connected");
     });
 
     socket.on("marketData", (data) => {
-      console.log("Received:", data);
+      console.log("LIVE DATA:", data);
       setStocks(data);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Socket Disconnected");
     });
 
     socket.on("connect_error", (err) => {
@@ -49,20 +36,37 @@ function App() {
 
     return () => {
       socket.off("marketData");
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.off("connect_error");
     };
   }, []);
+
+  const handleTrade = (symbol, action) => {
+    const trade = {
+      symbol,
+      action,
+      price: stocks[symbol].price,
+      time: new Date().toLocaleTimeString(),
+    };
+
+    setTradeHistory((prev) => [trade, ...prev]);
+  };
+
+  const getSignal = (change) => {
+    if (change > 1) return "BUY";
+    if (change < -1) return "SELL";
+    return "WAIT";
+  };
 
   return (
     <div className="app">
       <h1>Algorithmic Trading Dashboard</h1>
-
       <p className="subtitle">Real-Time Market Overview</p>
 
-      <div className="cards">
-
+      <div className="card-container">
         {Object.entries(stocks).map(([symbol, data]) => (
           <div className="card" key={symbol}>
-
             <h2>{symbol}</h2>
 
             <h1>${data.price}</h1>
@@ -75,31 +79,66 @@ function App() {
               {data.change}%
             </p>
 
-            <div className="actions">
-
-              <button className="buy">
+            <div className="button-group">
+              <button
+                className="buy-btn"
+                onClick={() => handleTrade(symbol, "BUY")}
+              >
                 BUY
               </button>
 
-              <button className="sell">
+              <button
+                className="sell-btn"
+                onClick={() => handleTrade(symbol, "SELL")}
+              >
                 SELL
               </button>
-
             </div>
 
-            <div
-              className={
-                data.signal === "BUY"
-                  ? "signal-buy"
-                  : "signal-sell"
-              }
-            >
-              Signal: {data.signal}
-            </div>
-
+            <p className="signal">
+              Signal: {getSignal(Number(data.change))}
+            </p>
           </div>
         ))}
+      </div>
 
+      <div className="history-section">
+        <h2>Trade History</h2>
+
+        {tradeHistory.length === 0 ? (
+          <p>No trades yet</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Symbol</th>
+                <th>Action</th>
+                <th>Price</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {tradeHistory.map((trade, index) => (
+                <tr key={index}>
+                  <td>{trade.time}</td>
+                  <td>{trade.symbol}</td>
+                  <td
+                    style={{
+                      color:
+                        trade.action === "BUY"
+                          ? "#00ff88"
+                          : "#ff4d4d",
+                    }}
+                  >
+                    {trade.action}
+                  </td>
+                  <td>${trade.price}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
