@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 import "./App.css";
 
-const socket = io("https://algo-backend-s750.onrender.com");
-
+const socket = io("https://algo-backend-s750.onrender.com", {
+  transports: ["polling"],
+});
 function App() {
   const [stocks, setStocks] = useState({
     AAPL: { price: "Loading...", change: 0 },
