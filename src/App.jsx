@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import "./App.css";
 
 const socket = io("https://algo-backend-s750.onrender.com", {
-  transports: ["polling"],
+  transports: ["polling", "websocket"],
   reconnection: true,
 });
 
@@ -21,6 +21,7 @@ function App() {
     });
 
     socket.on("marketData", (data) => {
+      console.log("DATA:", data);
       setStocks(data);
     });
 
