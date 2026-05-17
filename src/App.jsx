@@ -1,36 +1,42 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import "./App.css";
+
+const socket = io("https://algo-backend-s750.onrender.com", {
+  transports: ["websocket", "polling"],
+});
 
 function App() {
-  const [marketData, setMarketData] = useState({});
+  const [marketData, setMarketData] = useState({
+    AAPL: { price: "Loading...", change: 0 },
+    TSLA: { price: "Loading...", change: 0 },
+    BTC: { price: "Loading...", change: 0 },
+    ETH: { price: "Loading...", change: 0 },
+  });
 
   useEffect(() => {
-    const socket = io(
-      "https://algo-backend-s750.onrender.com"
-    );
-
     socket.on("connect", () => {
-      console.log("Connected:", socket.id);
+      console.log("Connected to backend");
     });
 
     socket.on("marketData", (data) => {
-      console.log("LIVE MARKET DATA:", data);
+      console.log("Received data:", data);
       setMarketData(data);
     });
 
-    socket.on("disconnect", () => {
-      console.log("Disconnected");
+    socket.on("connect_error", (err) => {
+      console.log("Socket connection error:", err);
     });
 
     return () => {
-      socket.disconnect();
+      socket.off("marketData");
     };
   }, []);
 
   return (
     <div
       style={{
-        backgroundColor: "#000",
+        backgroundColor: "black",
         minHeight: "100vh",
         color: "white",
         padding: "40px",
@@ -46,20 +52,14 @@ function App() {
         }}
       >
         <div>
-          <h1
-            style={{
-              fontSize: "80px",
-              margin: 0,
-              fontWeight: "bold",
-            }}
-          >
+          <h1 style={{ fontSize: "72px", margin: 0 }}>
             Algorithmic Trading Dashboard
           </h1>
 
           <p
             style={{
               color: "gray",
-              fontSize: "20px",
+              fontSize: "22px",
               marginTop: "20px",
             }}
           >
@@ -69,12 +69,12 @@ function App() {
 
         <button
           style={{
-            backgroundColor: "#14e05c",
-            color: "white",
+            backgroundColor: "#1ee65f",
             border: "none",
-            padding: "25px 50px",
+            color: "white",
+            padding: "25px 45px",
             borderRadius: "20px",
-            fontSize: "24px",
+            fontSize: "22px",
             fontWeight: "bold",
             cursor: "pointer",
           }}
@@ -87,42 +87,53 @@ function App() {
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(4, 1fr)",
-          gap: "20px",
+          gap: "25px",
         }}
       >
-        <Card
-          title="AAPL"
-          value={marketData?.AAPL?.price || "Loading..."}
-          change={marketData?.AAPL?.change || "0%"}
-        />
+        {Object.entries(marketData).map(([symbol, data]) => (
+          <div
+            key={symbol}
+            style={{
+              backgroundColor: "#001a70",
+              padding: "25px",
+              borderRadius: "25px",
+              minHeight: "250px",
+            }}
+          >
+            <h2 style={{ fontSize: "24px" }}>{symbol}</h2>
 
-        <Card
-          title="TSLA"
-          value={marketData?.TSLA?.price || "Loading..."}
-          change={marketData?.TSLA?.change || "0%"}
-        />
+            <h1
+              style={{
+                fontSize: "72px",
+                marginTop: "40px",
+                marginBottom: "40px",
+              }}
+            >
+              ${data.price}
+            </h1>
 
-        <Card
-          title="BTC"
-          value={marketData?.BTC?.price || "Loading..."}
-          change={marketData?.BTC?.change || "0%"}
-        />
-
-        <Card
-          title="ETH"
-          value={marketData?.ETH?.price || "Loading..."}
-          change={marketData?.ETH?.change || "0%"}
-        />
+            <p
+              style={{
+                color: data.change >= 0 ? "#00ff99" : "#ff4d4d",
+                fontSize: "20px",
+                fontWeight: "bold",
+              }}
+            >
+              {data.change}%
+            </p>
+          </div>
+        ))}
       </div>
 
       <div
         style={{
-          backgroundColor: "#001a66",
+          backgroundColor: "#001a70",
           marginTop: "40px",
           padding: "30px",
           borderRadius: "25px",
           display: "flex",
           justifyContent: "space-between",
+          alignItems: "center",
         }}
       >
         <div>
@@ -131,11 +142,7 @@ function App() {
           <p>Total Value: $10000.00</p>
           <p>USD Balance: $9200.00</p>
           <p>BTC Holdings: 0.0100</p>
-
-          <p>
-            BTC Price: $
-            {marketData?.BTC?.price || "Loading..."}
-          </p>
+          <p>BTC Price: ${marketData.BTC.price}</p>
         </div>
 
         <div
@@ -147,12 +154,12 @@ function App() {
         >
           <button
             style={{
-              backgroundColor: "#14e05c",
+              backgroundColor: "#1ee65f",
               color: "white",
               border: "none",
               padding: "20px 40px",
-              borderRadius: "15px",
-              fontSize: "20px",
+              borderRadius: "18px",
+              fontSize: "22px",
               fontWeight: "bold",
               cursor: "pointer",
             }}
@@ -162,12 +169,12 @@ function App() {
 
           <button
             style={{
-              backgroundColor: "#ff3636",
+              backgroundColor: "#ff3838",
               color: "white",
               border: "none",
               padding: "20px 40px",
-              borderRadius: "15px",
-              fontSize: "20px",
+              borderRadius: "18px",
+              fontSize: "22px",
               fontWeight: "bold",
               cursor: "pointer",
             }}
@@ -176,45 +183,6 @@ function App() {
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Card({ title, value, change }) {
-  return (
-    <div
-      style={{
-        backgroundColor: "#001a66",
-        padding: "30px",
-        borderRadius: "25px",
-      }}
-    >
-      <h2>{title}</h2>
-
-      <h1
-        style={{
-          fontSize: "70px",
-          marginTop: "40px",
-        }}
-      >
-        $
-        {typeof value === "number"
-          ? value.toLocaleString()
-          : value}
-      </h1>
-
-      <p
-        style={{
-          color:
-            change.toString().includes("-")
-              ? "#ff5b5b"
-              : "#14e05c",
-          fontWeight: "bold",
-          fontSize: "28px",
-        }}
-      >
-        {change}
-      </p>
     </div>
   );
 }
