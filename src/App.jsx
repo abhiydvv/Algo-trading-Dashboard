@@ -7,12 +7,7 @@ const socket = io("https://algo-backend-s750.onrender.com", {
 });
 
 function App() {
-  const [stocks, setStocks] = useState({
-    AAPL: { price: "Loading...", change: 0 },
-    TSLA: { price: "Loading...", change: 0 },
-    BTC: { price: "Loading...", change: 0 },
-    ETH: { price: "Loading...", change: 0 },
-  });
+  const [stocks, setStocks] = useState({});
 
   const [tradeHistory, setTradeHistory] = useState([]);
 
@@ -26,27 +21,27 @@ function App() {
       setStocks(data);
     });
 
-    socket.on("disconnect", () => {
-      console.log("Socket Disconnected");
-    });
-
     socket.on("connect_error", (err) => {
       console.log("Socket Error:", err.message);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Socket Disconnected");
     });
 
     return () => {
       socket.off("marketData");
       socket.off("connect");
-      socket.off("disconnect");
       socket.off("connect_error");
+      socket.off("disconnect");
     };
   }, []);
 
-  const handleTrade = (symbol, action) => {
+  const handleTrade = (symbol, action, price) => {
     const trade = {
       symbol,
       action,
-      price: stocks[symbol].price,
+      price,
       time: new Date().toLocaleTimeString(),
     };
 
@@ -54,61 +49,104 @@ function App() {
   };
 
   const getSignal = (change) => {
-    if (change > 1) return "BUY";
-    if (change < -1) return "SELL";
+    if (change > 2) return "BUY";
+    if (change < -2) return "SELL";
     return "WAIT";
   };
 
   return (
     <div className="app">
-      <h1>Algorithmic Trading Dashboard</h1>
-      <p className="subtitle">Real-Time Market Overview</p>
+      <div className="header">
+        <div>
+          <h1>Algorithmic Trading Dashboard</h1>
 
-      <div className="card-container">
+          <p className="subtitle">
+            Real-Time Market Overview
+          </p>
+        </div>
+
+        <button className="connect-btn">
+          Connect Broker
+        </button>
+      </div>
+
+      <div className="cards">
+
         {Object.entries(stocks).map(([symbol, data]) => (
+
           <div className="card" key={symbol}>
+
             <h2>{symbol}</h2>
 
-            <h1>${data.price}</h1>
+            <h1>
+              $
+              {typeof data.price === "number"
+                ? data.price.toFixed(2)
+                : data.price}
+            </h1>
 
             <p
               className={
-                Number(data.change) >= 0 ? "positive" : "negative"
+                Number(data.change) >= 0
+                  ? "green"
+                  : "red"
               }
             >
-              {data.change}%
+              {Number(data.change).toFixed(2)}%
             </p>
 
-            <div className="button-group">
+            <div className="buttons">
+
               <button
-                className="buy-btn"
-                onClick={() => handleTrade(symbol, "BUY")}
+                className="buy"
+                onClick={() =>
+                  handleTrade(
+                    symbol,
+                    "BUY",
+                    data.price
+                  )
+                }
               >
                 BUY
               </button>
 
               <button
-                className="sell-btn"
-                onClick={() => handleTrade(symbol, "SELL")}
+                className="sell"
+                onClick={() =>
+                  handleTrade(
+                    symbol,
+                    "SELL",
+                    data.price
+                  )
+                }
               >
                 SELL
               </button>
+
             </div>
 
-            <p className="signal">
+            <div className="signal">
               Signal: {getSignal(Number(data.change))}
-            </p>
+            </div>
+
           </div>
+
         ))}
+
       </div>
 
       <div className="history-section">
+
         <h2>Trade History</h2>
 
         {tradeHistory.length === 0 ? (
+
           <p>No trades yet</p>
+
         ) : (
+
           <table>
+
             <thead>
               <tr>
                 <th>Time</th>
@@ -119,10 +157,15 @@ function App() {
             </thead>
 
             <tbody>
+
               {tradeHistory.map((trade, index) => (
+
                 <tr key={index}>
+
                   <td>{trade.time}</td>
+
                   <td>{trade.symbol}</td>
+
                   <td
                     style={{
                       color:
@@ -133,12 +176,21 @@ function App() {
                   >
                     {trade.action}
                   </td>
-                  <td>${trade.price}</td>
+
+                  <td>
+                    ${trade.price}
+                  </td>
+
                 </tr>
+
               ))}
+
             </tbody>
+
           </table>
+
         )}
+
       </div>
     </div>
   );
