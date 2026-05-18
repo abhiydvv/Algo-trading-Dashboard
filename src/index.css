@@ -1,124 +1,65 @@
-body {
+/* ===== RESET & BASE ===== */
+*,
+*::before,
+*::after {
   margin: 0;
-  background: black;
-  font-family: Arial, sans-serif;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-.app-container {
-  padding: 40px;
-  color: white;
+:root {
+  /* Binance-style Colors */
+  --bg-primary: #0b0e11;
+  --bg-secondary: #1e2329;
+  --bg-tertiary: #2b3139;
+  --bg-card: #181a20;
+  --bg-hover: #2b3139;
+  --bg-input: #2b3139;
+  --bg-dropdown: #1e2329;
+
+  --brand-yellow: #f0b90b;
+  --brand-yellow-hover: #f8d12f;
+  --brand-yellow-bg: rgba(240, 185, 11, 0.08);
+  --brand-yellow-glow: rgba(240, 185, 11, 0.3);
+
+  --text-primary: #eaecef;
+  --text-secondary: #848e9c;
+  --text-tertiary: #5e6673;
+  --text-brand: #f0b90b;
+
+  --green: #0ecb81;
+  --green-bg: rgba(14, 203, 129, 0.08);
+  --green-hover: rgba(14, 203, 129, 0.15);
+  --red: #f6465d;
+  --red-bg: rgba(246, 70, 93, 0.08);
+  --red-hover: rgba(246, 70, 93, 0.15);
+
+  --border: #2b3139;
+  --border-light: #363c46;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* Sizing */
+  --nav-height: 48px;
+  --ticker-height: 36px;
 }
 
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+html, body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-x: hidden;
 }
 
-.header h1 {
-  font-size: 72px;
-  margin: 0;
-}
-
-.header p {
-  color: gray;
-  font-size: 22px;
-}
-
-.connect-btn {
-  background: #00dd66;
-  border: none;
-  padding: 18px 40px;
-  border-radius: 14px;
-  color: white;
-  font-size: 22px;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-.stock-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 25px;
-  margin-top: 40px;
-}
-
-.stock-card {
-  background: #04164a;
-  padding: 25px;
-  border-radius: 20px;
-}
-
-.stock-card h1 {
-  font-size: 64px;
-}
-
-.positive {
-  color: #00ff99;
-  font-weight: bold;
-}
-
-.negative {
-  color: #ff5555;
-  font-weight: bold;
-}
-
-.trading-panel {
-  margin-top: 40px;
-  background: #071a52;
-  padding: 30px;
-  border-radius: 20px;
-  display: flex;
-  justify-content: space-between;
-}
-
-.trade-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.buy-btn {
-  background: #00dd66;
-  color: white;
-  border: none;
-  padding: 18px 35px;
-  border-radius: 14px;
-  font-size: 22px;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-.sell-btn {
-  background: #ff3333;
-  color: white;
-  border: none;
-  padding: 18px 35px;
-  border-radius: 14px;
-  font-size: 22px;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-.chart-container {
-  margin-top: 40px;
-  background: #0a1f5c;
-  border-radius: 20px;
-  padding: 20px;
-}
-
-.history-panel {
-  margin-top: 40px;
-  background: #071a52;
-  padding: 25px;
-  border-radius: 20px;
-}
-
-.trade-item {
-  display: flex;
-  justify-content: space-between;
-  background: #0b225f;
-  padding: 15px;
-  border-radius: 10px;
-  margin-bottom: 10px;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
