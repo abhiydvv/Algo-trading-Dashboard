@@ -10,6 +10,21 @@ const qfLogo = "/logo.png";
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:10000";
 const socket = io(BACKEND_URL, { transports: ["websocket", "polling"] });
 
+// API helper
+const api = async (path, options = {}) => {
+  const token = localStorage.getItem("qf_token");
+  const headers = { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Request failed");
+    return data;
+  } catch (err) {
+    console.log(`API ${path}:`, err.message);
+    return null;
+  }
+};
+
 const ASSETS = {
   AAPL: { name: "Apple Inc.", type: "stock", pair: "AAPL/USD" },
   TSLA: { name: "Tesla Inc.", type: "stock", pair: "TSLA/USD" },
@@ -53,6 +68,7 @@ function App() {
   const [authMode, setAuthMode] = useState("login"); // login | signup
   const [authForm, setAuthForm] = useState({ email: "", password: "", name: "" });
   const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   // Add funds
   const [addFundsAmt, setAddFundsAmt] = useState("");
   const portfolioRef = useRef(portfolio);
@@ -61,6 +77,58 @@ function App() {
   useEffect(() => {
     engine.updateConfig({ ...algoConfig, enabled: algoEnabled });
   }, [algoEnabled, algoConfig]);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const token = localStorage.getItem("qf_token");
+    if (token) {
+      api("/api/auth/me").then(data => {
+        if (data?.user) {
+          setUser(data.user);
+          // Load portfolio from DB
+          api("/api/portfolio").then(p => {
+            if (p) {
+              setPortfolio(prev => ({
+                ...prev,
+                usd: p.usd ?? prev.usd,
+                AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0,
+                BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0,
+                avgCost: p.avgCost ?? prev.avgCost,
+                realizedPnl: p.realizedPnl ?? 0,
+              }));
+            }
+          });
+          // Load trades from DB
+          api("/api/trades").then(trades => {
+            if (trades && Array.isArray(trades)) {
+              setTradeHistory(trades.map(t => ({
+                ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+              })));
+            }
+          });
+        } else {
+          localStorage.removeItem("qf_token");
+        }
+      });
+    }
+  }, []);
+
+  // Save portfolio to DB (debounced)
+  const savePortfolioTimeout = useRef(null);
+  const savePortfolioDB = useCallback((p) => {
+    if (!localStorage.getItem("qf_token")) return;
+    clearTimeout(savePortfolioTimeout.current);
+    savePortfolioTimeout.current = setTimeout(() => {
+      const holdings = { AAPL: p.AAPL || 0, TSLA: p.TSLA || 0, BTC: p.BTC || 0, ETH: p.ETH || 0 };
+      api("/api/portfolio", { method: "PUT", body: JSON.stringify({ usd: p.usd, holdings, avgCost: p.avgCost, realizedPnl: p.realizedPnl }) });
+    }, 1000);
+  }, []);
+
+  // Save trade to DB
+  const saveTradeToDB = useCallback((trade) => {
+    if (!localStorage.getItem("qf_token")) return;
+    api("/api/trades", { method: "POST", body: JSON.stringify({ symbol: trade.symbol, action: trade.action, price: trade.price, qty: trade.qty, total: trade.total, pnl: trade.pnl || 0, source: trade.source, tradeMode: trade.tradeMode || "spot" }) });
+  }, []);
 
   useEffect(() => {
     socket.on("connect", () => setConnected(true));
@@ -173,7 +241,10 @@ function App() {
       }
       const trade = { symbol, action, price, qty, total: cost, pnl, avgEntry: prev.avgCost[symbol] || 0, source: "MANUAL", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
       setTradeHistory(prev2 => [trade, ...prev2].slice(0, 100));
-      return { ...prev, usd: action === "BUY" ? prev.usd - cost : prev.usd + cost, [symbol]: action === "BUY" ? (prev[symbol] || 0) + qty : (prev[symbol] || 0) - qty, avgCost: newAvgCost, realizedPnl: prev.realizedPnl + pnl };
+      saveTradeToDB(trade);
+      const newPortfolio = { ...prev, usd: action === "BUY" ? prev.usd - cost : prev.usd + cost, [symbol]: action === "BUY" ? (prev[symbol] || 0) + qty : (prev[symbol] || 0) - qty, avgCost: newAvgCost, realizedPnl: prev.realizedPnl + pnl };
+      savePortfolioDB(newPortfolio);
+      return newPortfolio;
     });
     setOrderAmount("");
   }, [stocks, orderAmount, portfolio]);
@@ -189,10 +260,12 @@ function App() {
     const pos = { id: Date.now(), symbol, side, entryPrice: price, qty, margin, leverage, notional, liqPrice, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
     setFuturesPositions(prev => [pos, ...prev]);
     setPortfolio(prev => ({ ...prev, usd: prev.usd - margin }));
-    const trade = { symbol, action: side, price, qty: qty.toFixed(4), total: margin, pnl: 0, source: "FUTURES", time: pos.time };
+    const trade = { symbol, action: side, price, qty: qty.toFixed(4), total: margin, pnl: 0, source: "FUTURES", tradeMode: "futures", time: pos.time };
     setTradeHistory(prev => [trade, ...prev].slice(0, 100));
+    saveTradeToDB(trade);
+    savePortfolioDB({ ...portfolio, usd: portfolio.usd - margin });
     setOrderAmount("");
-  }, [stocks, orderAmount, portfolio, leverage]);
+  }, [stocks, orderAmount, portfolio, leverage, saveTradeToDB, savePortfolioDB]);
 
   const closeFuturesPosition = useCallback((posId) => {
     setFuturesPositions(prev => {
@@ -596,15 +669,30 @@ function App() {
                     <div className="auth-input-group"><label>Email</label><input type="email" placeholder="you@example.com" value={authForm.email} onChange={e => setAuthForm(f => ({...f, email: e.target.value}))} /></div>
                     <div className="auth-input-group"><label>Password</label><input type="password" placeholder="••••••••" value={authForm.password} onChange={e => setAuthForm(f => ({...f, password: e.target.value}))} /></div>
                     {authError && <div className="auth-error">{authError}</div>}
-                    <button className="auth-submit" onClick={() => {
+                    <button className="auth-submit" disabled={authLoading} onClick={async () => {
                       if (!authForm.email || !authForm.password) { setAuthError("Please fill all fields"); return; }
                       if (authMode === "signup" && !authForm.name) { setAuthError("Please enter your name"); return; }
-                      setUser({ name: authForm.name || authForm.email.split("@")[0], email: authForm.email, uid: `QF-${Math.floor(Math.random() * 900000 + 100000)}`, joined: new Date().toLocaleDateString() });
-                      setAuthError(""); setShowAccountModal(false);
-                    }}>{authMode === "login" ? "Login" : "Create Account"}</button>
+                      setAuthLoading(true); setAuthError("");
+                      const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+                      const body = authMode === "signup" ? { name: authForm.name, email: authForm.email, password: authForm.password } : { email: authForm.email, password: authForm.password };
+                      const data = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
+                      setAuthLoading(false);
+                      if (data?.user && data?.token) {
+                        localStorage.setItem("qf_token", data.token);
+                        setUser(data.user);
+                        setAuthError(""); setShowAccountModal(false);
+                        // Load portfolio and trades from DB
+                        const p = await api("/api/portfolio");
+                        if (p) setPortfolio(prev => ({ ...prev, usd: p.usd ?? prev.usd, AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0, BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0, avgCost: p.avgCost ?? prev.avgCost, realizedPnl: p.realizedPnl ?? 0 }));
+                        const trades = await api("/api/trades");
+                        if (trades && Array.isArray(trades)) setTradeHistory(trades.map(t => ({ ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
+                      } else {
+                        setAuthError(data?.error || "Authentication failed. Check if backend is connected.");
+                      }
+                    }}>{authLoading ? "Please wait..." : (authMode === "login" ? "Login" : "Create Account")}</button>
                     <div className="auth-footer">{authMode === "login" ? "Don't have an account? " : "Already have an account? "}<button className="auth-switch" onClick={() => setAuthMode(m => m === "login" ? "signup" : "login")}>{authMode === "login" ? "Sign Up" : "Login"}</button></div>
                   </div>
-                  <div className="auth-demo-note">💡 Demo mode — Enter any email & password to simulate login</div>
+                  <div className="auth-demo-note">🔒 Secure — Passwords are hashed with bcrypt, sessions use JWT</div>
                 </div>
               ) : (
                 <div className="account-dashboard">
@@ -614,7 +702,7 @@ function App() {
                       <div className="account-name">{user.name}</div>
                       <div className="account-uid">{user.uid} • {user.email}</div>
                     </div>
-                    <button className="logout-btn" onClick={() => { setUser(null); setShowAccountModal(false); }}>Logout</button>
+                    <button className="logout-btn" onClick={() => { localStorage.removeItem("qf_token"); setUser(null); setShowAccountModal(false); }}>Logout</button>
                   </div>
                   <div className="account-stats-grid">
                     <div className="account-stat-card"><div className="asc-label">Total Balance</div><div className="asc-value gold">${totalValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}</div></div>
@@ -651,8 +739,8 @@ function App() {
               <div className="funds-section">
                 <div className="funds-row">
                   <input type="number" className="funds-input" placeholder="Amount (USD)" value={addFundsAmt} onChange={e => setAddFundsAmt(e.target.value)} />
-                  <button className="funds-btn deposit" onClick={() => { const a = parseFloat(addFundsAmt); if (a > 0) { setPortfolio(p => ({...p, usd: p.usd + a})); setAddFundsAmt(""); } }}>➕ Deposit</button>
-                  <button className="funds-btn withdraw" onClick={() => { const a = parseFloat(addFundsAmt); if (a > 0 && a <= portfolio.usd) { setPortfolio(p => ({...p, usd: p.usd - a})); setAddFundsAmt(""); } }}>➖ Withdraw</button>
+                  <button className="funds-btn deposit" onClick={() => { const a = parseFloat(addFundsAmt); if (a > 0) { setPortfolio(p => { const np = {...p, usd: p.usd + a}; savePortfolioDB(np); return np; }); setAddFundsAmt(""); } }}>➕ Deposit</button>
+                  <button className="funds-btn withdraw" onClick={() => { const a = parseFloat(addFundsAmt); if (a > 0 && a <= portfolio.usd) { setPortfolio(p => { const np = {...p, usd: p.usd - a}; savePortfolioDB(np); return np; }); setAddFundsAmt(""); } }}>➖ Withdraw</button>
                 </div>
                 <div className="funds-presets">
                   {[100, 500, 1000, 5000, 10000].map(v => <button key={v} className="funds-preset-btn" onClick={() => setAddFundsAmt(v.toString())}>${v.toLocaleString()}</button>)}
