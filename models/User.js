@@ -10,14 +10,13 @@ const userSchema = new mongoose.Schema({
 });
 
 // Generate UID before save
-userSchema.pre("save", async function (next) {
+userSchema.pre("save", async function () {
   if (!this.uid) {
     this.uid = `QF-${Math.floor(Math.random() * 900000 + 100000)}`;
   }
   if (this.isModified("password")) {
     this.password = await bcrypt.hash(this.password, 10);
   }
-  next();
 });
 
 // Compare password method

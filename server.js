@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import cors from "cors";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import User from "./models/User.js";
 import Portfolio from "./models/Portfolio.js";
 import Trade from "./models/Trade.js";
@@ -20,21 +21,66 @@ const io = new Server(server, {
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || "quantum-forge-jwt-secret";
-const API_KEY = process.env.TWELVEDATA_API_KEY || "90ff14df06ec4e0ab4f861ff008b41c1";
+const API_KEY = process.env.TWELVEDATA_API_KEY;
+if (!API_KEY) console.warn("⚠️  No TWELVEDATA_API_KEY set — stock data will not load");
 
 // ============================================
-// MONGODB CONNECTION
+// IN-MEMORY FALLBACK DATABASE
+// ============================================
+const inMemoryUsers = [];
+const inMemoryPortfolios = {}; // userId -> portfolio
+const inMemoryTrades = {}; // userId -> trades array
+
+const generateFakeId = () => new mongoose.Types.ObjectId().toString();
+
+// ============================================
+// MONGODB CONNECTION & SOCKET STATUS
 // ============================================
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (MONGODB_URI) {
-  mongoose
-    .connect(MONGODB_URI)
-    .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) => console.log("❌ MongoDB connection error:", err.message));
+  const connectDB = async () => {
+    try {
+      await mongoose.connect(MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000,
+      });
+      console.log("✅ MongoDB connected");
+    } catch (err) {
+      console.log("❌ MongoDB connection error:", err.message);
+      console.log("Retrying in 5 seconds...");
+      setTimeout(connectDB, 5000);
+    }
+  };
+  connectDB();
 } else {
   console.log("⚠️  No MONGODB_URI set — running without database (data will not persist)");
+  console.log("Please add MONGODB_URI to your .env file to enable data persistence.");
 }
+
+// Watch connection state to broadcast to connected sockets
+mongoose.connection.on("connected", () => {
+  console.log("📢 MongoDB Connected - broadcasting state to clients");
+  io.emit("dbStatus", { connected: true });
+});
+
+mongoose.connection.on("disconnected", () => {
+  console.log("📢 MongoDB Disconnected - broadcasting state to clients");
+  io.emit("dbStatus", { connected: false });
+});
+
+// Middleware to check DB connectivity (kept as no-op to avoid breaking route signatures)
+function requireDB(req, res, next) {
+  next();
+}
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  if (mongoose.connection.readyState === 1) {
+    await mongoose.connection.close();
+    console.log("MongoDB connection closed through app termination");
+  }
+  process.exit(0);
+});
 
 // ============================================
 // JWT MIDDLEWARE
@@ -54,63 +100,133 @@ function authMiddleware(req, res, next) {
 // ============================================
 // AUTH ROUTES
 // ============================================
-app.post("/api/auth/signup", async (req, res) => {
+app.post("/api/auth/signup", requireDB, async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ error: "Name, email, and password are required" });
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ error: "Email already registered" });
+    const lowerEmail = email.toLowerCase().trim();
+
+    if (mongoose.connection.readyState === 1) {
+      const existingUser = await User.findOne({ email: lowerEmail });
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already registered" });
+      }
+
+      const user = new User({ name, email: lowerEmail, password });
+      await user.save();
+
+      // Create default portfolio for user
+      const portfolio = new Portfolio({ userId: user._id });
+      await portfolio.save();
+
+      const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+      res.status(201).json({ user: user.toJSON(), token });
+    } else {
+      // In-Memory Fallback
+      const existingUser = inMemoryUsers.find(u => u.email === lowerEmail);
+      if (existingUser) {
+        return res.status(400).json({ error: "Email already registered" });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const userId = generateFakeId();
+      const user = {
+        _id: userId,
+        name,
+        email: lowerEmail,
+        password: hashedPassword,
+        uid: `QF-${Math.floor(Math.random() * 900000 + 100000)}`,
+        createdAt: new Date(),
+        isDemoMode: true
+      };
+
+      inMemoryUsers.push(user);
+
+      // Create default portfolio in-memory
+      inMemoryPortfolios[userId] = {
+        userId,
+        usd: 10000,
+        holdings: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+        avgCost: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+        realizedPnl: 0,
+        updatedAt: new Date()
+      };
+
+      const userResponse = { ...user };
+      delete userResponse.password;
+
+      const token = jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
+      res.status(201).json({ user: userResponse, token });
     }
-
-    const user = new User({ name, email, password });
-    await user.save();
-
-    // Create default portfolio for user
-    const portfolio = new Portfolio({ userId: user._id });
-    await portfolio.save();
-
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
-    res.status(201).json({ user: user.toJSON(), token });
   } catch (err) {
     console.error("Signup error:", err.message);
     res.status(500).json({ error: "Server error during signup" });
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", requireDB, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required" });
     }
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ error: "Invalid email or password" });
-    }
+    const lowerEmail = email.toLowerCase().trim();
 
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ error: "Invalid email or password" });
-    }
+    if (mongoose.connection.readyState === 1) {
+      const user = await User.findOne({ email: lowerEmail });
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-    const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ user: user.toJSON(), token });
+      const isMatch = await user.comparePassword(password);
+      if (!isMatch) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({ user: user.toJSON(), token });
+    } else {
+      // In-Memory Fallback
+      const user = inMemoryUsers.find(u => u.email === lowerEmail);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      const userResponse = { ...user };
+      delete userResponse.password;
+
+      const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({ user: userResponse, token });
+    }
   } catch (err) {
     console.error("Login error:", err.message);
     res.status(500).json({ error: "Server error during login" });
   }
 });
 
-app.get("/api/auth/me", authMiddleware, async (req, res) => {
+app.get("/api/auth/me", requireDB, authMiddleware, async (req, res) => {
   try {
-    const user = await User.findById(req.userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ user: user.toJSON() });
+    if (mongoose.connection.readyState === 1) {
+      const user = await User.findById(req.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      res.json({ user: user.toJSON() });
+    } else {
+      // In-Memory Fallback
+      const user = inMemoryUsers.find(u => u._id === req.userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const userResponse = { ...user };
+      delete userResponse.password;
+      res.json({ user: userResponse });
+    }
   } catch (err) {
     res.status(500).json({ error: "Server error" });
   }
@@ -119,38 +235,81 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
 // ============================================
 // PORTFOLIO ROUTES
 // ============================================
-app.get("/api/portfolio", authMiddleware, async (req, res) => {
+app.get("/api/portfolio", requireDB, authMiddleware, async (req, res) => {
   try {
-    let portfolio = await Portfolio.findOne({ userId: req.userId });
-    if (!portfolio) {
-      portfolio = new Portfolio({ userId: req.userId });
-      await portfolio.save();
+    if (mongoose.connection.readyState === 1) {
+      let portfolio = await Portfolio.findOne({ userId: req.userId });
+      if (!portfolio) {
+        portfolio = new Portfolio({ userId: req.userId });
+        await portfolio.save();
+      }
+      res.json({
+        usd: portfolio.usd,
+        holdings: Object.fromEntries(portfolio.holdings),
+        avgCost: Object.fromEntries(portfolio.avgCost),
+        realizedPnl: portfolio.realizedPnl,
+      });
+    } else {
+      // In-Memory Fallback
+      let portfolio = inMemoryPortfolios[req.userId];
+      if (!portfolio) {
+        portfolio = {
+          userId: req.userId,
+          usd: 10000,
+          holdings: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+          avgCost: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+          realizedPnl: 0,
+          updatedAt: new Date()
+        };
+        inMemoryPortfolios[req.userId] = portfolio;
+      }
+      res.json({
+        usd: portfolio.usd,
+        holdings: portfolio.holdings,
+        avgCost: portfolio.avgCost,
+        realizedPnl: portfolio.realizedPnl,
+      });
     }
-    // Convert Mongoose Maps to plain objects for frontend
-    res.json({
-      usd: portfolio.usd,
-      holdings: Object.fromEntries(portfolio.holdings),
-      avgCost: Object.fromEntries(portfolio.avgCost),
-      realizedPnl: portfolio.realizedPnl,
-    });
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch portfolio" });
   }
 });
 
-app.put("/api/portfolio", authMiddleware, async (req, res) => {
+app.put("/api/portfolio", requireDB, authMiddleware, async (req, res) => {
   try {
     const { usd, holdings, avgCost, realizedPnl } = req.body;
-    let portfolio = await Portfolio.findOne({ userId: req.userId });
-    if (!portfolio) {
-      portfolio = new Portfolio({ userId: req.userId });
+    if (mongoose.connection.readyState === 1) {
+      let portfolio = await Portfolio.findOne({ userId: req.userId });
+      if (!portfolio) {
+        portfolio = new Portfolio({ userId: req.userId });
+      }
+      if (usd !== undefined) portfolio.usd = usd;
+      if (holdings) portfolio.holdings = new Map(Object.entries(holdings));
+      if (avgCost) portfolio.avgCost = new Map(Object.entries(avgCost));
+      if (realizedPnl !== undefined) portfolio.realizedPnl = realizedPnl;
+      await portfolio.save();
+      res.json({ success: true });
+    } else {
+      // In-Memory Fallback
+      let portfolio = inMemoryPortfolios[req.userId];
+      if (!portfolio) {
+        portfolio = {
+          userId: req.userId,
+          usd: 10000,
+          holdings: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+          avgCost: { AAPL: 0, TSLA: 0, BTC: 0, ETH: 0 },
+          realizedPnl: 0,
+          updatedAt: new Date()
+        };
+        inMemoryPortfolios[req.userId] = portfolio;
+      }
+      if (usd !== undefined) portfolio.usd = usd;
+      if (holdings) portfolio.holdings = holdings;
+      if (avgCost) portfolio.avgCost = avgCost;
+      if (realizedPnl !== undefined) portfolio.realizedPnl = realizedPnl;
+      portfolio.updatedAt = new Date();
+      res.json({ success: true });
     }
-    if (usd !== undefined) portfolio.usd = usd;
-    if (holdings) portfolio.holdings = new Map(Object.entries(holdings));
-    if (avgCost) portfolio.avgCost = new Map(Object.entries(avgCost));
-    if (realizedPnl !== undefined) portfolio.realizedPnl = realizedPnl;
-    await portfolio.save();
-    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: "Failed to save portfolio" });
   }
@@ -159,22 +318,45 @@ app.put("/api/portfolio", authMiddleware, async (req, res) => {
 // ============================================
 // TRADE ROUTES
 // ============================================
-app.get("/api/trades", authMiddleware, async (req, res) => {
+app.get("/api/trades", requireDB, authMiddleware, async (req, res) => {
   try {
-    const trades = await Trade.find({ userId: req.userId })
-      .sort({ timestamp: -1 })
-      .limit(100);
-    res.json(trades);
+    if (mongoose.connection.readyState === 1) {
+      const trades = await Trade.find({ userId: req.userId })
+        .sort({ timestamp: -1 })
+        .limit(100);
+      res.json(trades);
+    } else {
+      // In-Memory Fallback
+      const trades = inMemoryTrades[req.userId] || [];
+      const sorted = [...trades].sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+      res.json(sorted);
+    }
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch trades" });
   }
 });
 
-app.post("/api/trades", authMiddleware, async (req, res) => {
+app.post("/api/trades", requireDB, authMiddleware, async (req, res) => {
   try {
-    const trade = new Trade({ ...req.body, userId: req.userId });
-    await trade.save();
-    res.status(201).json(trade);
+    if (mongoose.connection.readyState === 1) {
+      const trade = new Trade({ ...req.body, userId: req.userId });
+      await trade.save();
+      res.status(201).json(trade);
+    } else {
+      // In-Memory Fallback
+      const tradeId = generateFakeId();
+      const trade = {
+        _id: tradeId,
+        ...req.body,
+        userId: req.userId,
+        timestamp: new Date()
+      };
+      if (!inMemoryTrades[req.userId]) {
+        inMemoryTrades[req.userId] = [];
+      }
+      inMemoryTrades[req.userId].push(trade);
+      res.status(201).json(trade);
+    }
   } catch (err) {
     res.status(500).json({ error: "Failed to save trade" });
   }
@@ -293,6 +475,7 @@ async function fetchMarketData() {
 // ============================================
 io.on("connection", (socket) => {
   console.log("Client connected");
+  socket.emit("dbStatus", { connected: mongoose.connection.readyState === 1 });
   fetchMarketData();
   const interval = setInterval(fetchMarketData, 10000);
   socket.on("disconnect", () => {

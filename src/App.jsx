@@ -7,8 +7,8 @@ import "./App.css";
 
 const qfLogo = "/logo.png";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:10000";
-const socket = io(BACKEND_URL, { transports: ["websocket", "polling"] });
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s750.onrender.com");
+const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"] }));
 
 // API helper
 const api = async (path, options = {}) => {
@@ -17,11 +17,13 @@ const api = async (path, options = {}) => {
   try {
     const res = await fetch(`${BACKEND_URL}${path}`, { ...options, headers });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Request failed");
+    if (!res.ok) {
+      return { error: data.error || "Request failed", _failed: true };
+    }
     return data;
   } catch (err) {
     console.log(`API ${path}:`, err.message);
-    return null;
+    return { error: "Network error — is the backend server running?", _failed: true };
   }
 };
 
@@ -40,6 +42,7 @@ function App() {
   const [stocks, setStocks] = useState({});
   const [tradeHistory, setTradeHistory] = useState([]);
   const [connected, setConnected] = useState(false);
+  const [dbConnected, setDbConnected] = useState(true);
   const [selectedAsset, setSelectedAsset] = useState("BTC");
   const [chartData, setChartData] = useState({});
   const [priceHistory, setPriceHistory] = useState({});
@@ -83,11 +86,11 @@ function App() {
     const token = localStorage.getItem("qf_token");
     if (token) {
       api("/api/auth/me").then(data => {
-        if (data?.user) {
+        if (data?.user && !data?._failed) {
           setUser(data.user);
           // Load portfolio from DB
           api("/api/portfolio").then(p => {
-            if (p) {
+            if (p && !p._failed) {
               setPortfolio(prev => ({
                 ...prev,
                 usd: p.usd ?? prev.usd,
@@ -100,7 +103,7 @@ function App() {
           });
           // Load trades from DB
           api("/api/trades").then(trades => {
-            if (trades && Array.isArray(trades)) {
+            if (trades && !trades._failed && Array.isArray(trades)) {
               setTradeHistory(trades.map(t => ({
                 ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
               })));
@@ -132,6 +135,7 @@ function App() {
 
   useEffect(() => {
     socket.on("connect", () => setConnected(true));
+    socket.on("dbStatus", (data) => setDbConnected(data.connected));
     socket.on("marketData", (data) => {
       setStocks(data);
       setLoading(false);
@@ -169,7 +173,13 @@ function App() {
     });
     socket.on("connect_error", () => setConnected(false));
     socket.on("disconnect", () => setConnected(false));
-    return () => { socket.off("marketData"); socket.off("connect"); socket.off("connect_error"); socket.off("disconnect"); };
+    return () => { 
+      socket.off("marketData"); 
+      socket.off("connect"); 
+      socket.off("dbStatus");
+      socket.off("connect_error"); 
+      socket.off("disconnect"); 
+    };
   }, []);
 
   // Algo engine runs on price history changes
@@ -199,20 +209,25 @@ function App() {
           }
           const t = { ...trade, pnl, avgEntry: prev.avgCost[trade.symbol], time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
           setTradeHistory(prev2 => [t, ...prev2].slice(0, 100));
-          return {
+          saveTradeToDB(t);
+          const newPortfolio = {
             ...prev,
             usd: trade.action === "BUY" ? prev.usd - trade.total : prev.usd + trade.total,
             [trade.symbol]: trade.action === "BUY" ? prev[trade.symbol] + trade.qty : prev[trade.symbol] - trade.qty,
             avgCost: newAvgCost,
             realizedPnl: prev.realizedPnl + pnl,
           };
+          savePortfolioDB(newPortfolio);
+          return newPortfolio;
         });
       });
     }
-  }, [priceHistory, stocks]);
+  }, [priceHistory, stocks, saveTradeToDB, savePortfolioDB]);
 
   useEffect(() => {
-    if (stocks[selectedAsset]) setOrderPrice(stocks[selectedAsset].price.toString());
+    if (stocks[selectedAsset] && stocks[selectedAsset].price !== undefined) {
+      setOrderPrice(stocks[selectedAsset].price.toString());
+    }
   }, [selectedAsset, stocks]);
 
   const handleTrade = useCallback((symbol, action) => {
@@ -259,11 +274,14 @@ function App() {
     const liqPrice = side === "LONG" ? price * (1 - 1 / leverage * 0.9) : price * (1 + 1 / leverage * 0.9);
     const pos = { id: Date.now(), symbol, side, entryPrice: price, qty, margin, leverage, notional, liqPrice, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
     setFuturesPositions(prev => [pos, ...prev]);
-    setPortfolio(prev => ({ ...prev, usd: prev.usd - margin }));
-    const trade = { symbol, action: side, price, qty: qty.toFixed(4), total: margin, pnl: 0, source: "FUTURES", tradeMode: "futures", time: pos.time };
+    setPortfolio(prev => {
+      const newPortfolio = { ...prev, usd: prev.usd - margin };
+      savePortfolioDB(newPortfolio);
+      return newPortfolio;
+    });
+    const trade = { symbol, action: side, price, qty: parseFloat(qty.toFixed(4)), total: margin, pnl: 0, source: "FUTURES", tradeMode: "futures", time: pos.time };
     setTradeHistory(prev => [trade, ...prev].slice(0, 100));
     saveTradeToDB(trade);
-    savePortfolioDB({ ...portfolio, usd: portfolio.usd - margin });
     setOrderAmount("");
   }, [stocks, orderAmount, portfolio, leverage, saveTradeToDB, savePortfolioDB]);
 
@@ -273,12 +291,17 @@ function App() {
       if (!pos) return prev;
       const curPrice = stocks[pos.symbol]?.price || pos.entryPrice;
       const pnl = pos.side === "LONG" ? (curPrice - pos.entryPrice) * pos.qty : (pos.entryPrice - curPrice) * pos.qty;
-      setPortfolio(p => ({ ...p, usd: p.usd + pos.margin + pnl, realizedPnl: p.realizedPnl + pnl }));
-      const trade = { symbol: pos.symbol, action: `CLOSE ${pos.side}`, price: curPrice, qty: pos.qty, total: pos.margin + pnl, pnl, source: "FUTURES", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+      setPortfolio(p => {
+        const newPortfolio = { ...p, usd: p.usd + pos.margin + pnl, realizedPnl: p.realizedPnl + pnl };
+        savePortfolioDB(newPortfolio);
+        return newPortfolio;
+      });
+      const trade = { symbol: pos.symbol, action: `CLOSE ${pos.side}`, price: curPrice, qty: pos.qty, total: pos.margin + pnl, pnl, source: "FUTURES", tradeMode: "futures", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
       setTradeHistory(prev2 => [trade, ...prev2].slice(0, 100));
+      saveTradeToDB(trade);
       return prev.filter(p => p.id !== posId);
     });
-  }, [stocks]);
+  }, [stocks, saveTradeToDB, savePortfolioDB]);
 
   const handleMarginTrade = useCallback((symbol, action) => {
     const price = stocks[symbol]?.price;
@@ -290,19 +313,28 @@ function App() {
       const pos = { id: Date.now(), symbol, side: "BUY", entryPrice: price, qty, borrowed: borrowAmt, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
       setMarginPositions(prev => [pos, ...prev]);
       setMarginBorrowed(prev => prev + borrowAmt);
-      setPortfolio(prev => ({ ...prev, usd: prev.usd - (cost - borrowAmt), [symbol]: (prev[symbol] || 0) + qty }));
+      setPortfolio(prev => {
+        const newPortfolio = { ...prev, usd: prev.usd - (cost - borrowAmt), [symbol]: (prev[symbol] || 0) + qty };
+        savePortfolioDB(newPortfolio);
+        return newPortfolio;
+      });
     } else {
       if ((portfolio[symbol] || 0) < qty) return;
       const entryPos = marginPositions.find(p => p.symbol === symbol);
       const avgEntry = entryPos ? entryPos.entryPrice : portfolio.avgCost[symbol] || 0;
       const pnl = (price - avgEntry) * qty;
-      setPortfolio(prev => ({ ...prev, usd: prev.usd + cost, [symbol]: (prev[symbol] || 0) - qty, realizedPnl: prev.realizedPnl + pnl }));
+      setPortfolio(prev => {
+        const newPortfolio = { ...prev, usd: prev.usd + cost, [symbol]: (prev[symbol] || 0) - qty, realizedPnl: prev.realizedPnl + pnl };
+        savePortfolioDB(newPortfolio);
+        return newPortfolio;
+      });
       setMarginPositions(prev => prev.filter(p => p.symbol !== symbol));
     }
-    const trade = { symbol, action, price, qty, total: cost, pnl: 0, source: "MARGIN", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+    const trade = { symbol, action, price, qty, total: cost, pnl: 0, source: "MARGIN", tradeMode: "margin", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
     setTradeHistory(prev => [trade, ...prev].slice(0, 100));
+    saveTradeToDB(trade);
     setOrderAmount("");
-  }, [stocks, orderAmount, portfolio, marginPositions]);
+  }, [stocks, orderAmount, portfolio, marginPositions, saveTradeToDB, savePortfolioDB]);
 
   const totalValue = portfolio.usd + Object.keys(ASSETS).reduce((s, sym) => s + (portfolio[sym] || 0) * (stocks[sym]?.price || 0), 0);
   const totalUnrealized = Object.keys(ASSETS).reduce((s, sym) => s + ((portfolio[sym] || 0) > 0 && (portfolio.avgCost[sym] || 0) > 0 ? ((stocks[sym]?.price || 0) - portfolio.avgCost[sym]) * portfolio[sym] : 0), 0);
@@ -342,9 +374,13 @@ function App() {
             <span className="algo-power-text">{algoEnabled ? "ALGO ON" : "ALGO OFF"}</span>
             <span className={`algo-power-dot ${algoEnabled ? "on" : ""}`} />
           </button>
-          <div className="nav-status" id="connection-status">
+          <div className="nav-status" id="connection-status" title={connected ? "Websocket connected to market feed!" : "Websocket disconnected"}>
             <span className={`nav-status-dot ${connected ? "live" : "offline"}`} />
-            <span>{connected ? "Live" : "Offline"}</span>
+            <span>{connected ? "Feed Live" : "Feed Off"}</span>
+          </div>
+          <div className={`db-status ${dbConnected ? "live" : "demo"}`} id="db-status" title={dbConnected ? "MongoDB Atlas connected successfully!" : "MongoDB down or IP not whitelisted. Running in local Demo Mode. Progress is stored in-memory."}>
+            <span className={`db-status-dot ${dbConnected ? "live" : "demo"}`} />
+            <span>{dbConnected ? "Database Connected" : "Local Demo Mode"}</span>
           </div>
           <button className="nav-btn nav-btn-secondary" onClick={() => setShowAssetModal(true)}>💰 Assets</button>
           {user ? <button className="nav-btn nav-btn-primary" onClick={() => setShowAccountModal(true)}>👤 {user.name}</button> : <button className="nav-btn nav-btn-primary" onClick={() => setShowAccountModal(true)}>🔐 Login</button>}
@@ -536,7 +572,14 @@ function App() {
               {["25%", "50%", "75%", "100%"].map(pct => {
                 const pv = parseInt(pct) / 100;
                 return <button key={pct} className="order-pct-btn" onClick={() => {
-                  setOrderAmount((portfolio.usd * pv).toFixed(tradeMode === "futures" ? 0 : 4));
+                  if (tradeMode === "futures") {
+                    setOrderAmount((portfolio.usd * pv).toFixed(0));
+                  } else if (orderSide === "sell") {
+                    setOrderAmount(((portfolio[selectedAsset] || 0) * pv).toFixed(4));
+                  } else {
+                    const price = stocks[selectedAsset]?.price || 1;
+                    setOrderAmount(((portfolio.usd * pv) / price).toFixed(4));
+                  }
                 }}>{pct}</button>;
               })}
             </div>
@@ -677,17 +720,21 @@ function App() {
                       const body = authMode === "signup" ? { name: authForm.name, email: authForm.email, password: authForm.password } : { email: authForm.email, password: authForm.password };
                       const data = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
                       setAuthLoading(false);
+                      if (data?._failed || data?.error) {
+                        setAuthError(data.error || "Authentication failed. Check if backend is connected.");
+                        return;
+                      }
                       if (data?.user && data?.token) {
                         localStorage.setItem("qf_token", data.token);
                         setUser(data.user);
                         setAuthError(""); setShowAccountModal(false);
                         // Load portfolio and trades from DB
                         const p = await api("/api/portfolio");
-                        if (p) setPortfolio(prev => ({ ...prev, usd: p.usd ?? prev.usd, AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0, BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0, avgCost: p.avgCost ?? prev.avgCost, realizedPnl: p.realizedPnl ?? 0 }));
+                        if (p && !p._failed) setPortfolio(prev => ({ ...prev, usd: p.usd ?? prev.usd, AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0, BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0, avgCost: p.avgCost ?? prev.avgCost, realizedPnl: p.realizedPnl ?? 0 }));
                         const trades = await api("/api/trades");
-                        if (trades && Array.isArray(trades)) setTradeHistory(trades.map(t => ({ ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
+                        if (trades && !trades._failed && Array.isArray(trades)) setTradeHistory(trades.map(t => ({ ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
                       } else {
-                        setAuthError(data?.error || "Authentication failed. Check if backend is connected.");
+                        setAuthError("Unexpected response from server. Please try again.");
                       }
                     }}>{authLoading ? "Please wait..." : (authMode === "login" ? "Login" : "Create Account")}</button>
                     <div className="auth-footer">{authMode === "login" ? "Don't have an account? " : "Already have an account? "}<button className="auth-switch" onClick={() => setAuthMode(m => m === "login" ? "signup" : "login")}>{authMode === "login" ? "Sign Up" : "Login"}</button></div>
