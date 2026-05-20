@@ -8,7 +8,7 @@ import "./App.css";
 const qfLogo = "/logo.png";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s750.onrender.com");
-const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"] }));
+const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"], reconnectionAttempts: 5, reconnectionDelay: 3000 }));
 
 // API helper
 const api = async (path, options = {}) => {
@@ -235,8 +235,9 @@ function App() {
     if (!price || price === 0) return;
     const qty = parseFloat(orderAmount) || 1;
     const cost = price * qty;
-    if (action === "BUY" && cost > portfolio.usd) return;
-    if (action === "SELL" && (portfolio[symbol] || 0) < qty) return;
+    const currentPortfolio = portfolioRef.current;
+    if (action === "BUY" && cost > currentPortfolio.usd) return;
+    if (action === "SELL" && (currentPortfolio[symbol] || 0) < qty) return;
     setPortfolio(prev => {
       let pnl = 0;
       let newAvgCost = { ...prev.avgCost };
@@ -262,13 +263,14 @@ function App() {
       return newPortfolio;
     });
     setOrderAmount("");
-  }, [stocks, orderAmount, portfolio]);
+  }, [stocks, orderAmount, saveTradeToDB, savePortfolioDB]);
 
   const handleFuturesTrade = useCallback((symbol, side) => {
     const price = stocks[symbol]?.price;
     if (!price || price === 0) return;
     const margin = parseFloat(orderAmount) || 100;
-    if (margin > portfolio.usd) return;
+    const currentPortfolio = portfolioRef.current;
+    if (margin > currentPortfolio.usd) return;
     const notional = margin * leverage;
     const qty = notional / price;
     const liqPrice = side === "LONG" ? price * (1 - 1 / leverage * 0.9) : price * (1 + 1 / leverage * 0.9);
@@ -283,7 +285,7 @@ function App() {
     setTradeHistory(prev => [trade, ...prev].slice(0, 100));
     saveTradeToDB(trade);
     setOrderAmount("");
-  }, [stocks, orderAmount, portfolio, leverage, saveTradeToDB, savePortfolioDB]);
+  }, [stocks, orderAmount, leverage, saveTradeToDB, savePortfolioDB]);
 
   const closeFuturesPosition = useCallback((posId) => {
     setFuturesPositions(prev => {
@@ -308,7 +310,9 @@ function App() {
     if (!price || price === 0) return;
     const qty = parseFloat(orderAmount) || 1;
     const cost = price * qty;
-    const borrowAmt = Math.max(0, cost - portfolio.usd) * 0.8;
+    const currentPortfolio = portfolioRef.current;
+    const borrowAmt = Math.max(0, cost - currentPortfolio.usd) * 0.8;
+    let tradePnl = 0;
     if (action === "BUY") {
       const pos = { id: Date.now(), symbol, side: "BUY", entryPrice: price, qty, borrowed: borrowAmt, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
       setMarginPositions(prev => [pos, ...prev]);
@@ -319,22 +323,22 @@ function App() {
         return newPortfolio;
       });
     } else {
-      if ((portfolio[symbol] || 0) < qty) return;
+      if ((currentPortfolio[symbol] || 0) < qty) return;
       const entryPos = marginPositions.find(p => p.symbol === symbol);
-      const avgEntry = entryPos ? entryPos.entryPrice : portfolio.avgCost[symbol] || 0;
-      const pnl = (price - avgEntry) * qty;
+      const avgEntry = entryPos ? entryPos.entryPrice : currentPortfolio.avgCost[symbol] || 0;
+      tradePnl = (price - avgEntry) * qty;
       setPortfolio(prev => {
-        const newPortfolio = { ...prev, usd: prev.usd + cost, [symbol]: (prev[symbol] || 0) - qty, realizedPnl: prev.realizedPnl + pnl };
+        const newPortfolio = { ...prev, usd: prev.usd + cost, [symbol]: (prev[symbol] || 0) - qty, realizedPnl: prev.realizedPnl + tradePnl };
         savePortfolioDB(newPortfolio);
         return newPortfolio;
       });
       setMarginPositions(prev => prev.filter(p => p.symbol !== symbol));
     }
-    const trade = { symbol, action, price, qty, total: cost, pnl: 0, source: "MARGIN", tradeMode: "margin", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
+    const trade = { symbol, action, price, qty, total: cost, pnl: tradePnl, source: "MARGIN", tradeMode: "margin", time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
     setTradeHistory(prev => [trade, ...prev].slice(0, 100));
     saveTradeToDB(trade);
     setOrderAmount("");
-  }, [stocks, orderAmount, portfolio, marginPositions, saveTradeToDB, savePortfolioDB]);
+  }, [stocks, orderAmount, marginPositions, saveTradeToDB, savePortfolioDB]);
 
   const totalValue = portfolio.usd + Object.keys(ASSETS).reduce((s, sym) => s + (portfolio[sym] || 0) * (stocks[sym]?.price || 0), 0);
   const totalUnrealized = Object.keys(ASSETS).reduce((s, sym) => s + ((portfolio[sym] || 0) > 0 && (portfolio.avgCost[sym] || 0) > 0 ? ((stocks[sym]?.price || 0) - portfolio.avgCost[sym]) * portfolio[sym] : 0), 0);
@@ -681,7 +685,7 @@ function App() {
             })}
             <div className="portfolio-row" style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 8 }}>
               <span className="portfolio-asset-name" style={{ fontWeight: 600, color: "var(--text-primary)" }}>Total Value</span>
-              <span className="portfolio-asset-value" style={{ color: "var(--brand-yellow)" }}>${(portfolio.usd + Object.keys(ASSETS).reduce((s, sym) => s + portfolio[sym] * (stocks[sym]?.price || 0), 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+              <span className="portfolio-asset-value" style={{ color: "var(--brand-yellow)" }}>${(portfolio.usd + Object.keys(ASSETS).reduce((s, sym) => s + (portfolio[sym] || 0) * (stocks[sym]?.price || 0), 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
             </div>
             <div className="portfolio-row" style={{ paddingTop: 4 }}>
               <span className="portfolio-asset-name" style={{ fontSize: 11 }}>Realized P&L</span>

@@ -236,10 +236,17 @@ export function createStrategyEngine(configOverrides = {}) {
         log("trade", `AUTO BUY ${symbol}: ${evaluation.reason}`, { symbol });
         lastTradeTime[symbol] = now;
 
-        // Track position
+        // Track position with weighted average entry price
+        const existingPos = openPositions[symbol];
+        const existingQty = existingPos?.qty || 0;
+        const existingEntry = existingPos?.entryPrice || currentPrice;
+        const newQty = existingQty + qty;
+        const avgEntry = newQty > 0
+          ? (existingEntry * existingQty + currentPrice * qty) / newQty
+          : currentPrice;
         openPositions[symbol] = {
-          entryPrice: currentPrice,
-          qty: (openPositions[symbol]?.qty || 0) + qty,
+          entryPrice: avgEntry,
+          qty: newQty,
           time: new Date().toISOString(),
         };
 
