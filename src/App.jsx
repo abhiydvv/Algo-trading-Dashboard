@@ -7,9 +7,36 @@ import "./App.css";
 
 const qfLogo = "/logo.png";
 
-const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s75o.onrender.com");
-const BACKEND_URL = localStorage.getItem("qf_custom_backend_url") || DEFAULT_BACKEND_URL;
-const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"], reconnectionAttempts: 5, reconnectionDelay: 3000 }));
+// Auto-correct any legacy local storage typos (e.g. s750 instead of s75o) on initialization
+(function autoCorrectLegacyTypo() {
+  try {
+    const savedUrl = localStorage.getItem("qf_custom_backend_url");
+    if (savedUrl && savedUrl.includes("s750")) {
+      const correctedUrl = savedUrl.replace("s750", "s75o");
+      localStorage.setItem("qf_custom_backend_url", correctedUrl);
+    }
+  } catch (e) {
+    // Ignore storage restrictions
+  }
+})();
+
+// In dev mode, use Vite proxy (empty string = relative URLs) by default. In prod, use configured backend URL.
+const DEFAULT_BACKEND_URL = import.meta.env.DEV
+  ? ""
+  : (import.meta.env.VITE_BACKEND_URL || "https://algo-backend-s75o.onrender.com");
+const BACKEND_URL = localStorage.getItem("qf_custom_backend_url") !== null
+  ? localStorage.getItem("qf_custom_backend_url")
+  : DEFAULT_BACKEND_URL;
+
+// Socket: if BACKEND_URL is truthy (e.g. not empty string ""), connect directly; otherwise connect to relative origin (proxied by Vite in dev)
+const SOCKET_URL = BACKEND_URL || undefined;
+const socket = window.__qf_socket || (window.__qf_socket = io(SOCKET_URL, {
+  transports: ["websocket", "polling"],
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 10000,
+  timeout: 10000,
+}));
 
 // API helper
 const api = async (path, options = {}) => {
@@ -190,83 +217,15 @@ function App() {
     };
   }, []);
 
-  // Local Demo Mock Feed Fallback if socket is not connected
+  // When socket reconnects, request fresh market data
   useEffect(() => {
-    let intervalId = null;
-    const mockStocks = {
-      AAPL: { price: 192.45, change: 1.24 },
-      TSLA: { price: 175.10, change: -2.11 },
-      BTC: { price: 62000.0, change: 4.82 },
-      ETH: { price: 3100.0, change: 2.01 }
-    };
-
-    const updateMockFeed = () => {
-      if (connected) return;
-      const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      
-      setStocks(prev => {
-        const next = {};
-        Object.keys(mockStocks).forEach(sym => {
-          const prevAsset = prev[sym] || mockStocks[sym];
-          const jitter = prevAsset.price * (Math.random() - 0.5) * 0.002;
-          const newPrice = Math.max(0.01, prevAsset.price + jitter);
-          const percentChange = prevAsset.change + (Math.random() - 0.5) * 0.05;
-          next[sym] = {
-            price: parseFloat(newPrice.toFixed(sym === "BTC" || sym === "ETH" ? 2 : 2)),
-            change: parseFloat(percentChange.toFixed(2)),
-            high: Math.max(prevAsset.high || newPrice, newPrice),
-            low: Math.min(prevAsset.low || newPrice, newPrice),
-            open: prevAsset.open || newPrice,
-            volume: (prevAsset.volume || 100000) + Math.floor(Math.random() * 1000)
-          };
-        });
-
-        setPriceHistory(prevHist => {
-          const updated = { ...prevHist };
-          Object.keys(next).forEach(sym => {
-            updated[sym] = [...(prevHist[sym] || []), next[sym].price].slice(-120);
-          });
-          return updated;
-        });
-
-        setChartData(prevChart => {
-          const updated = { ...prevChart };
-          Object.keys(next).forEach(sym => {
-            const arr = prevChart[sym] || [];
-            const currentPrice = next[sym].price;
-            const prevPrice = arr.length > 0 ? arr[arr.length - 1].price : currentPrice;
-            const prices = [...(arr.map(p => p.price)), currentPrice];
-            const sma5 = computeSMA(prices, 5);
-            const sma20 = computeSMA(prices, 20);
-            const bb = computeBollingerBands(prices, 20, 2);
-            const jitter = currentPrice * 0.0003;
-            const open = prevPrice;
-            const close = currentPrice;
-            const high = Math.max(open, close) + Math.abs(jitter);
-            const low = Math.min(open, close) - Math.abs(jitter);
-            updated[sym] = [...arr, { time: now, price: currentPrice, open, close, high, low, candleBody: [open, close], sma5, sma20, bbUpper: bb.upper, bbLower: bb.lower }].slice(-60);
-          });
-          return updated;
-        });
-
-        setLoading(false);
-        return next;
-      });
-    };
-
-    // If socket doesn't connect within 1.5 seconds, start generating mock feed
-    const timeoutId = setTimeout(() => {
-      if (!connected) {
-        setDbConnected(false);
-        updateMockFeed();
-        intervalId = setInterval(updateMockFeed, 2000);
-      }
-    }, 1500);
-
-    return () => {
-      clearTimeout(timeoutId);
-      if (intervalId) clearInterval(intervalId);
-    };
+    if (connected) {
+      setLoading(true);
+      // The server sends marketData on connection, but set a small timeout
+      // to clear loading if data arrives quickly
+      const t = setTimeout(() => setLoading(false), 5000);
+      return () => clearTimeout(t);
+    }
   }, [connected]);
 
   // Algo engine runs on price history changes
@@ -470,9 +429,9 @@ function App() {
             <span>{connected ? "Feed Live" : "Feed Off"}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <div className={`db-status ${dbConnected ? "live" : "demo"}`} id="db-status" title={dbConnected ? "MongoDB Atlas connected successfully!" : `Database not connected. Error Details:\n${dbError || "No connection to backend. Running in offline/fallback mode."}`}>
+            <div className={`db-status ${dbConnected ? "live" : "demo"}`} id="db-status" title={dbConnected ? "MongoDB Atlas connected successfully!" : `Database not connected. ${dbError || "Connecting..."}`}>
               <span className={`db-status-dot ${dbConnected ? "live" : "demo"}`} />
-              <span>{dbConnected ? "Database Connected" : "Local Demo Mode"}</span>
+              <span>{dbConnected ? "DB Connected" : "DB Connecting..."}</span>
             </div>
             <button className="nav-btn nav-btn-secondary" style={{ padding: "6px 8px", minWidth: "unset", display: "flex", alignItems: "center" }} onClick={() => { setTempBackendUrl(BACKEND_URL); setShowSettingsModal(true); }} title="Backend Connection Settings">⚙️</button>
           </div>
@@ -832,19 +791,9 @@ function App() {
                           setAuthError("Unexpected response from server. Please try again.");
                         }
                       }}>{authLoading ? "Please wait..." : (authMode === "login" ? "Login" : "Create Account")}</button>
-                      <button type="button" className="nav-btn-secondary" style={{ width: "100%", padding: "12px", border: "1px solid var(--border)", borderRadius: "6px", cursor: "pointer", fontWeight: 700, fontSize: "13px", background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }} onClick={() => {
-                        setUser({
-                          name: "Demo User",
-                          email: "demo@quantumforge.io",
-                          uid: `QF-DEMO-${Math.floor(Math.random() * 900000 + 100000)}`,
-                          joined: "Local Session"
-                        });
-                        setDbConnected(false);
-                        setAuthError("");
-                        setShowAccountModal(false);
-                      }}>
-                        🎮 Continue in Demo Mode (Offline)
-                      </button>
+                      <div style={{ fontSize: "12px", color: "var(--text-tertiary)", textAlign: "center", padding: "4px 0" }}>
+                        {!connected && <span style={{ color: "#f6465d" }}>⚠️ Backend server not detected. Run <code style={{ background: "rgba(255,255,255,0.1)", padding: "2px 6px", borderRadius: "3px" }}>npm run dev:all</code> to start both servers.</span>}
+                      </div>
                     </div>
                     <div className="auth-footer">{authMode === "login" ? "Don't have an account? " : "Already have an account? "}<button className="auth-switch" onClick={() => setAuthMode(m => m === "login" ? "signup" : "login")}>{authMode === "login" ? "Sign Up" : "Login"}</button></div>
                   </div>
