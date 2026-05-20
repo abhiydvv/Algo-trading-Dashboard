@@ -2,7 +2,7 @@
 
 A full-stack, real-time algorithmic trading platform built with **React**, **Node.js**, **Socket.IO**, and **live market APIs**. Features automated trading strategies powered by technical analysis indicators, candlestick charting, multi-mode trading (Spot, Futures, Margin), and real-time portfolio tracking.
 
-> **Live Demo**: [Deployed on Vercel](https://quantum-forge.vercel.app) | **Backend**: [Hosted on Render](https://algo-backend-s750.onrender.com)
+> **Live Demo**: [Deployed on Vercel](https://quantum-forge.vercel.app) | **Backend**: [Hosted on Render](https://algo-backend-s75o.onrender.com)
 
 ---
 

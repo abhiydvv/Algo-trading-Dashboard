@@ -7,7 +7,7 @@ import "./App.css";
 
 const qfLogo = "/logo.png";
 
-const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s750.onrender.com");
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s75o.onrender.com");
 const BACKEND_URL = localStorage.getItem("qf_custom_backend_url") || DEFAULT_BACKEND_URL;
 const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"], reconnectionAttempts: 5, reconnectionDelay: 3000 }));
 
