@@ -428,25 +428,66 @@ async function fetchMarketData() {
 
     // CRYPTO DATA
     try {
-      const cryptoResponse = await fetch(
-        "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
-      );
-      const crypto = await cryptoResponse.json();
+      let btcPrice = null, btcChange = null;
+      let ethPrice = null, ethChange = null;
 
-      if (crypto.bitcoin) {
+      // Try Binance API first for maximum reliability on cloud hosting
+      try {
+        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbols=[%22BTCUSDT%22,%22ETHUSDT%22]");
+        if (binanceRes.ok) {
+          const data = await binanceRes.json();
+          const btcData = data.find(item => item.symbol === "BTCUSDT");
+          const ethData = data.find(item => item.symbol === "ETHUSDT");
+          if (btcData) {
+            btcPrice = parseFloat(btcData.lastPrice);
+            btcChange = parseFloat(btcData.priceChangePercent);
+          }
+          if (ethData) {
+            ethPrice = parseFloat(ethData.lastPrice);
+            ethChange = parseFloat(ethData.priceChangePercent);
+          }
+        }
+      } catch (binanceErr) {
+        console.log("Binance API Fallback Error:", binanceErr.message);
+      }
+
+      // If Binance failed, fallback to CoinGecko
+      if (!btcPrice || !ethPrice) {
+        try {
+          const cryptoResponse = await fetch(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
+          );
+          if (cryptoResponse.ok) {
+            const crypto = await cryptoResponse.json();
+            if (crypto.bitcoin) {
+              btcPrice = crypto.bitcoin.usd;
+              btcChange = parseFloat((crypto.bitcoin.usd_24h_change ?? 0).toFixed(2));
+            }
+            if (crypto.ethereum) {
+              ethPrice = crypto.ethereum.usd;
+              ethChange = parseFloat((crypto.ethereum.usd_24h_change ?? 0).toFixed(2));
+            }
+          }
+        } catch (coingeckoErr) {
+          console.log("CoinGecko API Error:", coingeckoErr.message);
+        }
+      }
+
+      // Update market data if we got any values
+      if (btcPrice !== null) {
         currentMarketData.BTC = {
-          price: crypto.bitcoin.usd || currentMarketData.BTC.price,
-          change: parseFloat((crypto.bitcoin.usd_24h_change ?? 0).toFixed(2)),
+          price: btcPrice,
+          change: btcChange !== null ? btcChange : currentMarketData.BTC.change,
         };
       }
-      if (crypto.ethereum) {
+      if (ethPrice !== null) {
         currentMarketData.ETH = {
-          price: crypto.ethereum.usd || currentMarketData.ETH.price,
-          change: parseFloat((crypto.ethereum.usd_24h_change ?? 0).toFixed(2)),
+          price: ethPrice,
+          change: ethChange !== null ? ethChange : currentMarketData.ETH.change,
         };
       }
     } catch (e) {
-      console.log("Crypto API Error:", e.message);
+      console.log("Crypto API General Error:", e.message);
     }
 
     // Save market snapshots to DB (if connected)
