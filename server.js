@@ -37,6 +37,7 @@ const generateFakeId = () => new mongoose.Types.ObjectId().toString();
 // MONGODB CONNECTION & SOCKET STATUS
 // ============================================
 const MONGODB_URI = process.env.MONGODB_URI;
+let dbErrorMsg = "";
 
 if (MONGODB_URI) {
   const connectDB = async () => {
@@ -45,14 +46,19 @@ if (MONGODB_URI) {
         serverSelectionTimeoutMS: 10000,
       });
       console.log("✅ MongoDB connected");
+      dbErrorMsg = "";
+      io.emit("dbStatus", { connected: true, error: "" });
     } catch (err) {
       console.log("❌ MongoDB connection error:", err.message);
+      dbErrorMsg = err.message;
+      io.emit("dbStatus", { connected: false, error: err.message });
       console.log("Retrying in 5 seconds...");
       setTimeout(connectDB, 5000);
     }
   };
   connectDB();
 } else {
+  dbErrorMsg = "No MONGODB_URI set in environment variables";
   console.log("⚠️  No MONGODB_URI set — running without database (data will not persist)");
   console.log("Please add MONGODB_URI to your .env file to enable data persistence.");
 }
@@ -60,12 +66,13 @@ if (MONGODB_URI) {
 // Watch connection state to broadcast to connected sockets
 mongoose.connection.on("connected", () => {
   console.log("📢 MongoDB Connected - broadcasting state to clients");
-  io.emit("dbStatus", { connected: true });
+  dbErrorMsg = "";
+  io.emit("dbStatus", { connected: true, error: "" });
 });
 
 mongoose.connection.on("disconnected", () => {
   console.log("📢 MongoDB Disconnected - broadcasting state to clients");
-  io.emit("dbStatus", { connected: false });
+  io.emit("dbStatus", { connected: false, error: dbErrorMsg || "MongoDB disconnected" });
 });
 
 // Middleware to check DB connectivity (kept as no-op to avoid breaking route signatures)
@@ -475,7 +482,7 @@ async function fetchMarketData() {
 // ============================================
 io.on("connection", (socket) => {
   console.log("Client connected");
-  socket.emit("dbStatus", { connected: mongoose.connection.readyState === 1 });
+  socket.emit("dbStatus", { connected: mongoose.connection.readyState === 1, error: mongoose.connection.readyState === 1 ? "" : dbErrorMsg });
   fetchMarketData();
   const interval = setInterval(fetchMarketData, 10000);
   socket.on("disconnect", () => {

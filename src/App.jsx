@@ -7,7 +7,8 @@ import "./App.css";
 
 const qfLogo = "/logo.png";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s750.onrender.com");
+const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || (import.meta.env.DEV ? "http://localhost:10000" : "https://algo-backend-s750.onrender.com");
+const BACKEND_URL = localStorage.getItem("qf_custom_backend_url") || DEFAULT_BACKEND_URL;
 const socket = window.__qf_socket || (window.__qf_socket = io(BACKEND_URL, { transports: ["websocket", "polling"], reconnectionAttempts: 5, reconnectionDelay: 3000 }));
 
 // API helper
@@ -61,6 +62,9 @@ function App() {
   const [tradeMode, setTradeMode] = useState("spot");
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [showAssetModal, setShowAssetModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [tempBackendUrl, setTempBackendUrl] = useState(BACKEND_URL);
+  const [dbError, setDbError] = useState("");
   const [leverage, setLeverage] = useState(10);
   const [futuresPositions, setFuturesPositions] = useState([]);
   const [marginPositions, setMarginPositions] = useState([]);
@@ -135,7 +139,11 @@ function App() {
 
   useEffect(() => {
     socket.on("connect", () => setConnected(true));
-    socket.on("dbStatus", (data) => setDbConnected(data.connected));
+    socket.on("dbStatus", (data) => {
+      setDbConnected(data.connected);
+      if (data.error) setDbError(data.error);
+      else setDbError("");
+    });
     socket.on("marketData", (data) => {
       setStocks(data);
       setLoading(false);
@@ -461,9 +469,12 @@ function App() {
             <span className={`nav-status-dot ${connected ? "live" : "offline"}`} />
             <span>{connected ? "Feed Live" : "Feed Off"}</span>
           </div>
-          <div className={`db-status ${dbConnected ? "live" : "demo"}`} id="db-status" title={dbConnected ? "MongoDB Atlas connected successfully!" : "MongoDB down or IP not whitelisted. Running in local Demo Mode. Progress is stored in-memory."}>
-            <span className={`db-status-dot ${dbConnected ? "live" : "demo"}`} />
-            <span>{dbConnected ? "Database Connected" : "Local Demo Mode"}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div className={`db-status ${dbConnected ? "live" : "demo"}`} id="db-status" title={dbConnected ? "MongoDB Atlas connected successfully!" : `Database not connected. Error Details:\n${dbError || "No connection to backend. Running in offline/fallback mode."}`}>
+              <span className={`db-status-dot ${dbConnected ? "live" : "demo"}`} />
+              <span>{dbConnected ? "Database Connected" : "Local Demo Mode"}</span>
+            </div>
+            <button className="nav-btn nav-btn-secondary" style={{ padding: "6px 8px", minWidth: "unset", display: "flex", alignItems: "center" }} onClick={() => { setTempBackendUrl(BACKEND_URL); setShowSettingsModal(true); }} title="Backend Connection Settings">⚙️</button>
           </div>
           <button className="nav-btn nav-btn-secondary" onClick={() => setShowAssetModal(true)}>💰 Assets</button>
           {user ? <button className="nav-btn nav-btn-primary" onClick={() => setShowAccountModal(true)}>👤 {user.name}</button> : <button className="nav-btn nav-btn-primary" onClick={() => setShowAccountModal(true)}>🔐 Login</button>}
@@ -904,6 +915,76 @@ function App() {
                     ); })}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONNECTION SETTINGS MODAL */}
+      {showSettingsModal && (
+        <div className="modal-overlay" onClick={() => setShowSettingsModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: "450px" }}>
+            <div className="modal-header">
+              <span className="modal-title">⚙️ Connection Settings</span>
+              <button className="modal-close" onClick={() => setShowSettingsModal(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              <p style={{ fontSize: "13px", color: "var(--text-secondary)", lineHeight: "1.4" }}>
+                Quantum Forge connects to a Node.js backend to enable database persistence for authentication and portfolio states.
+              </p>
+              
+              <div className="auth-input-group" style={{ marginBottom: "0px" }}>
+                <label style={{ fontWeight: 600, color: "var(--text-primary)" }}>Backend Service URL</label>
+                <input 
+                  type="text" 
+                  value={tempBackendUrl} 
+                  onChange={e => setTempBackendUrl(e.target.value)} 
+                  placeholder="https://your-backend.onrender.com" 
+                  style={{ width: "100%", padding: "10px", marginTop: "6px", background: "var(--bg-tertiary)", border: "1px solid var(--border)", borderRadius: "4px", color: "var(--text-primary)" }}
+                />
+              </div>
+
+              <div style={{ padding: "12px", borderRadius: "4px", background: "rgba(255, 255, 255, 0.02)", border: "1px solid var(--border)", fontSize: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <span style={{ color: "var(--text-tertiary)" }}>Websocket State:</span>
+                  <span style={{ fontWeight: 600, color: connected ? "var(--green)" : "var(--red)" }}>{connected ? "🟢 Feed Live" : "🔴 Feed Offline"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <span style={{ color: "var(--text-tertiary)" }}>Database Connected:</span>
+                  <span style={{ fontWeight: 600, color: dbConnected ? "var(--green)" : "var(--red)" }}>{dbConnected ? "🟢 Connected" : "🔴 Disconnected"}</span>
+                </div>
+                {dbError && (
+                  <div style={{ color: "#f6465d", marginTop: "8px", borderTop: "1px solid var(--border)", paddingTop: "8px", wordBreak: "break-word", lineHeight: "1.4" }}>
+                    <strong>Database Connection Error:</strong><br />
+                    {dbError}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button 
+                  className="auth-submit" 
+                  style={{ flex: 1, padding: "10px", margin: 0 }}
+                  onClick={() => {
+                    localStorage.setItem("qf_custom_backend_url", tempBackendUrl);
+                    setShowSettingsModal(false);
+                    window.location.reload();
+                  }}
+                >
+                  Save & Reconnect
+                </button>
+                <button 
+                  className="nav-btn-secondary" 
+                  style={{ padding: "10px 14px", border: "1px solid var(--border)", borderRadius: "4px", cursor: "pointer" }}
+                  onClick={() => {
+                    localStorage.removeItem("qf_custom_backend_url");
+                    setShowSettingsModal(false);
+                    window.location.reload();
+                  }}
+                >
+                  Reset
+                </button>
               </div>
             </div>
           </div>
