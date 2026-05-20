@@ -182,6 +182,85 @@ function App() {
     };
   }, []);
 
+  // Local Demo Mock Feed Fallback if socket is not connected
+  useEffect(() => {
+    let intervalId = null;
+    const mockStocks = {
+      AAPL: { price: 192.45, change: 1.24 },
+      TSLA: { price: 175.10, change: -2.11 },
+      BTC: { price: 62000.0, change: 4.82 },
+      ETH: { price: 3100.0, change: 2.01 }
+    };
+
+    const updateMockFeed = () => {
+      if (connected) return;
+      const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      
+      setStocks(prev => {
+        const next = {};
+        Object.keys(mockStocks).forEach(sym => {
+          const prevAsset = prev[sym] || mockStocks[sym];
+          const jitter = prevAsset.price * (Math.random() - 0.5) * 0.002;
+          const newPrice = Math.max(0.01, prevAsset.price + jitter);
+          const percentChange = prevAsset.change + (Math.random() - 0.5) * 0.05;
+          next[sym] = {
+            price: parseFloat(newPrice.toFixed(sym === "BTC" || sym === "ETH" ? 2 : 2)),
+            change: parseFloat(percentChange.toFixed(2)),
+            high: Math.max(prevAsset.high || newPrice, newPrice),
+            low: Math.min(prevAsset.low || newPrice, newPrice),
+            open: prevAsset.open || newPrice,
+            volume: (prevAsset.volume || 100000) + Math.floor(Math.random() * 1000)
+          };
+        });
+
+        setPriceHistory(prevHist => {
+          const updated = { ...prevHist };
+          Object.keys(next).forEach(sym => {
+            updated[sym] = [...(prevHist[sym] || []), next[sym].price].slice(-120);
+          });
+          return updated;
+        });
+
+        setChartData(prevChart => {
+          const updated = { ...prevChart };
+          Object.keys(next).forEach(sym => {
+            const arr = prevChart[sym] || [];
+            const currentPrice = next[sym].price;
+            const prevPrice = arr.length > 0 ? arr[arr.length - 1].price : currentPrice;
+            const prices = [...(arr.map(p => p.price)), currentPrice];
+            const sma5 = computeSMA(prices, 5);
+            const sma20 = computeSMA(prices, 20);
+            const bb = computeBollingerBands(prices, 20, 2);
+            const jitter = currentPrice * 0.0003;
+            const open = prevPrice;
+            const close = currentPrice;
+            const high = Math.max(open, close) + Math.abs(jitter);
+            const low = Math.min(open, close) - Math.abs(jitter);
+            updated[sym] = [...arr, { time: now, price: currentPrice, open, close, high, low, candleBody: [open, close], sma5, sma20, bbUpper: bb.upper, bbLower: bb.lower }].slice(-60);
+          });
+          return updated;
+        });
+
+        setLoading(false);
+        return next;
+      });
+    };
+
+    // If socket doesn't connect within 1.5 seconds, start generating mock feed
+    const timeoutId = setTimeout(() => {
+      if (!connected) {
+        setDbConnected(false);
+        updateMockFeed();
+        intervalId = setInterval(updateMockFeed, 2000);
+      }
+    }, 1500);
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [connected]);
+
   // Algo engine runs on price history changes
   useEffect(() => {
     if (Object.keys(priceHistory).length === 0) return;
@@ -716,31 +795,46 @@ function App() {
                     <div className="auth-input-group"><label>Email</label><input type="email" placeholder="you@example.com" value={authForm.email} onChange={e => setAuthForm(f => ({...f, email: e.target.value}))} /></div>
                     <div className="auth-input-group"><label>Password</label><input type="password" placeholder="••••••••" value={authForm.password} onChange={e => setAuthForm(f => ({...f, password: e.target.value}))} /></div>
                     {authError && <div className="auth-error">{authError}</div>}
-                    <button className="auth-submit" disabled={authLoading} onClick={async () => {
-                      if (!authForm.email || !authForm.password) { setAuthError("Please fill all fields"); return; }
-                      if (authMode === "signup" && !authForm.name) { setAuthError("Please enter your name"); return; }
-                      setAuthLoading(true); setAuthError("");
-                      const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
-                      const body = authMode === "signup" ? { name: authForm.name, email: authForm.email, password: authForm.password } : { email: authForm.email, password: authForm.password };
-                      const data = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
-                      setAuthLoading(false);
-                      if (data?._failed || data?.error) {
-                        setAuthError(data.error || "Authentication failed. Check if backend is connected.");
-                        return;
-                      }
-                      if (data?.user && data?.token) {
-                        localStorage.setItem("qf_token", data.token);
-                        setUser(data.user);
-                        setAuthError(""); setShowAccountModal(false);
-                        // Load portfolio and trades from DB
-                        const p = await api("/api/portfolio");
-                        if (p && !p._failed) setPortfolio(prev => ({ ...prev, usd: p.usd ?? prev.usd, AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0, BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0, avgCost: p.avgCost ?? prev.avgCost, realizedPnl: p.realizedPnl ?? 0 }));
-                        const trades = await api("/api/trades");
-                        if (trades && !trades._failed && Array.isArray(trades)) setTradeHistory(trades.map(t => ({ ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
-                      } else {
-                        setAuthError("Unexpected response from server. Please try again.");
-                      }
-                    }}>{authLoading ? "Please wait..." : (authMode === "login" ? "Login" : "Create Account")}</button>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
+                      <button className="auth-submit" disabled={authLoading} onClick={async () => {
+                        if (!authForm.email || !authForm.password) { setAuthError("Please fill all fields"); return; }
+                        if (authMode === "signup" && !authForm.name) { setAuthError("Please enter your name"); return; }
+                        setAuthLoading(true); setAuthError("");
+                        const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+                        const body = authMode === "signup" ? { name: authForm.name, email: authForm.email, password: authForm.password } : { email: authForm.email, password: authForm.password };
+                        const data = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
+                        setAuthLoading(false);
+                        if (data?._failed || data?.error) {
+                          setAuthError(data.error || "Authentication failed. Check if backend is connected.");
+                          return;
+                        }
+                        if (data?.user && data?.token) {
+                          localStorage.setItem("qf_token", data.token);
+                          setUser(data.user);
+                          setAuthError(""); setShowAccountModal(false);
+                          // Load portfolio and trades from DB
+                          const p = await api("/api/portfolio");
+                          if (p && !p._failed) setPortfolio(prev => ({ ...prev, usd: p.usd ?? prev.usd, AAPL: p.holdings?.AAPL ?? 0, TSLA: p.holdings?.TSLA ?? 0, BTC: p.holdings?.BTC ?? 0, ETH: p.holdings?.ETH ?? 0, avgCost: p.avgCost ?? prev.avgCost, realizedPnl: p.realizedPnl ?? 0 }));
+                          const trades = await api("/api/trades");
+                          if (trades && !trades._failed && Array.isArray(trades)) setTradeHistory(trades.map(t => ({ ...t, time: new Date(t.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
+                        } else {
+                          setAuthError("Unexpected response from server. Please try again.");
+                        }
+                      }}>{authLoading ? "Please wait..." : (authMode === "login" ? "Login" : "Create Account")}</button>
+                      <button type="button" className="nav-btn-secondary" style={{ width: "100%", padding: "12px", border: "1px solid var(--border)", borderRadius: "6px", cursor: "pointer", fontWeight: 700, fontSize: "13px", background: "rgba(255,255,255,0.05)", color: "var(--text-secondary)" }} onClick={() => {
+                        setUser({
+                          name: "Demo User",
+                          email: "demo@quantumforge.io",
+                          uid: `QF-DEMO-${Math.floor(Math.random() * 900000 + 100000)}`,
+                          joined: "Local Session"
+                        });
+                        setDbConnected(false);
+                        setAuthError("");
+                        setShowAccountModal(false);
+                      }}>
+                        🎮 Continue in Demo Mode (Offline)
+                      </button>
+                    </div>
                     <div className="auth-footer">{authMode === "login" ? "Don't have an account? " : "Already have an account? "}<button className="auth-switch" onClick={() => setAuthMode(m => m === "login" ? "signup" : "login")}>{authMode === "login" ? "Sign Up" : "Login"}</button></div>
                   </div>
                   <div className="auth-demo-note">🔒 Secure — Passwords are hashed with bcrypt, sessions use JWT</div>
